@@ -51,6 +51,7 @@ import org.apache.iceberg.Transaction;
 import org.apache.iceberg.Transactions;
 import org.apache.iceberg.catalog.BaseSessionCatalog;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.CatalogTransaction;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableCommit;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -65,9 +66,11 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.rest.auth.OAuth2Properties;
 import org.apache.iceberg.rest.auth.OAuth2Util;
 import org.apache.iceberg.rest.auth.OAuth2Util.AuthSession;
+import org.apache.iceberg.rest.requests.BeginTransactionRequest;
 import org.apache.iceberg.rest.requests.CommitTransactionRequest;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
@@ -76,6 +79,7 @@ import org.apache.iceberg.rest.requests.RegisterTableRequest;
 import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.BeginTransactionResponse;
 import org.apache.iceberg.rest.responses.ConfigResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
@@ -296,24 +300,26 @@ public class RESTSessionCatalog extends BaseSessionCatalog
   }
 
   private LoadTableResponse loadInternal(
-      SessionContext context, TableIdentifier identifier, SnapshotMode mode) {
+      SessionContext context, TableIdentifier identifier, SnapshotMode mode, String transactionId) {
+    Map<String, String> params = Maps.newHashMap(mode.params());
+    params.put("transaction-id", transactionId);
     return client.get(
         paths.table(identifier),
-        mode.params(),
+        params,
         LoadTableResponse.class,
         headers(context),
         ErrorHandlers.tableErrorHandler());
   }
 
-  @Override
-  public Table loadTable(SessionContext context, TableIdentifier identifier) {
+  public Table loadTableWithTransaction(
+      SessionContext context, TableIdentifier identifier, String transactionId) {
     checkIdentifierIsValid(identifier);
 
     MetadataTableType metadataType;
     LoadTableResponse response;
     TableIdentifier loadedIdent;
     try {
-      response = loadInternal(context, identifier, snapshotMode);
+      response = loadInternal(context, identifier, snapshotMode, transactionId);
       loadedIdent = identifier;
       metadataType = null;
 
@@ -323,7 +329,7 @@ public class RESTSessionCatalog extends BaseSessionCatalog
         // attempt to load a metadata table using the identifier's namespace as the base table
         TableIdentifier baseIdent = TableIdentifier.of(identifier.namespace().levels());
         try {
-          response = loadInternal(context, baseIdent, snapshotMode);
+          response = loadInternal(context, baseIdent, snapshotMode, transactionId);
           loadedIdent = baseIdent;
         } catch (NoSuchTableException ignored) {
           // the base table does not exist
@@ -346,7 +352,7 @@ public class RESTSessionCatalog extends BaseSessionCatalog
               .setPreviousFileLocation(null)
               .setSnapshotsSupplier(
                   () ->
-                      loadInternal(context, finalIdentifier, SnapshotMode.ALL)
+                      loadInternal(context, finalIdentifier, SnapshotMode.ALL, transactionId)
                           .tableMetadata()
                           .snapshots())
               .discardChanges()
@@ -373,8 +379,12 @@ public class RESTSessionCatalog extends BaseSessionCatalog
     if (metadataType != null) {
       return MetadataTableUtils.createMetadataTableInstance(table, metadataType);
     }
-
     return table;
+  }
+
+  @Override
+  public Table loadTable(SessionContext context, TableIdentifier identifier) {
+    return loadTableWithTransaction(context, identifier, null);
   }
 
   private void trackFileIO(RESTTableOperations ops) {
@@ -687,7 +697,7 @@ public class RESTSessionCatalog extends BaseSessionCatalog
 
     @Override
     public Transaction replaceTransaction() {
-      LoadTableResponse response = loadInternal(context, ident, snapshotMode);
+      LoadTableResponse response = loadInternal(context, ident, snapshotMode, null);
       String fullName = fullTableName(ident);
 
       AuthSession session = tableSession(response.config(), session(context));
@@ -968,6 +978,16 @@ public class RESTSessionCatalog extends BaseSessionCatalog
         paths.commitTransaction(),
         new CommitTransactionRequest(tableChanges),
         null,
+        headers(context),
+        ErrorHandlers.tableCommitHandler());
+  }
+
+  public BeginTransactionResponse beginTransaction(
+      SessionContext context, CatalogTransaction.IsolationLevel isolationLevel) {
+    return client.post(
+        paths.beginTransaction(),
+        new BeginTransactionRequest(isolationLevel),
+        BeginTransactionResponse.class,
         headers(context),
         ErrorHandlers.tableCommitHandler());
   }

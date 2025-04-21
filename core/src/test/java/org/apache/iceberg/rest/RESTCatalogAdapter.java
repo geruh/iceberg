@@ -46,6 +46,7 @@ import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.rest.requests.BeginTransactionRequest;
 import org.apache.iceberg.rest.requests.CommitTransactionRequest;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
@@ -54,6 +55,7 @@ import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.ReportMetricsRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.BeginTransactionResponse;
 import org.apache.iceberg.rest.responses.ConfigResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.ErrorResponse;
@@ -145,7 +147,12 @@ public class RESTCatalogAdapter implements RESTClient {
         ReportMetricsRequest.class,
         null),
     COMMIT_TRANSACTION(
-        HTTPMethod.POST, "v1/transactions/commit", CommitTransactionRequest.class, null);
+        HTTPMethod.POST, "v1/transactions/commit", CommitTransactionRequest.class, null),
+    BEGIN_TRANSACTION(
+        HTTPMethod.POST,
+        "v1/transactions",
+        BeginTransactionRequest.class,
+        BeginTransactionResponse.class);
 
     private final HTTPMethod method;
     private final int requiredLength;
@@ -348,7 +355,9 @@ public class RESTCatalogAdapter implements RESTClient {
       case LOAD_TABLE:
         {
           TableIdentifier ident = identFromPathVars(vars);
-          return castResponse(responseType, CatalogHandlers.loadTable(catalog, ident));
+          return castResponse(
+              responseType,
+              CatalogHandlers.loadTable(catalog, ident, vars.getOrDefault("transaction-id", null)));
         }
 
       case REGISTER_TABLE:
@@ -385,6 +394,12 @@ public class RESTCatalogAdapter implements RESTClient {
           CommitTransactionRequest request = castRequest(CommitTransactionRequest.class, body);
           commitTransaction(catalog, request);
           return null;
+        }
+      case BEGIN_TRANSACTION:
+        {
+          BeginTransactionRequest request = castRequest(BeginTransactionRequest.class, body);
+          return castResponse(
+              responseType, CatalogHandlers.beginTransaction(catalog, request.isolationLevel()));
         }
 
       default:

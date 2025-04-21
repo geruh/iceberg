@@ -26,14 +26,20 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import org.apache.iceberg.BaseMetastoreTableOperations;
+import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.CatalogUtil;
+import org.apache.iceberg.Table;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableOperations;
+import org.apache.iceberg.catalog.BaseCatalogTransaction;
+import org.apache.iceberg.catalog.CatalogTransaction;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsCatalogTransactions;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
@@ -58,13 +64,15 @@ import org.apache.iceberg.view.ViewUtil;
  * effects. It uses {@link InMemoryFileIO}.
  */
 public class InMemoryCatalog extends BaseMetastoreViewCatalog
-    implements SupportsNamespaces, Closeable {
+    implements SupportsNamespaces, Closeable, SupportsCatalogTransactions {
   private static final Joiner SLASH = Joiner.on("/");
   private static final Joiner DOT = Joiner.on(".");
 
   private final ConcurrentMap<Namespace, Map<String, String>> namespaces;
   private final ConcurrentMap<TableIdentifier, String> tables;
   private final ConcurrentMap<TableIdentifier, String> views;
+  private final Map<String, Map<TableIdentifier, String>> activeTransactions =
+      Maps.newConcurrentMap();
   private FileIO io;
   private String catalogName;
   private String warehouseLocation;
@@ -305,6 +313,7 @@ public class InMemoryCatalog extends BaseMetastoreViewCatalog
     namespaces.clear();
     tables.clear();
     views.clear();
+    activeTransactions.clear();
   }
 
   @Override
@@ -362,20 +371,74 @@ public class InMemoryCatalog extends BaseMetastoreViewCatalog
     }
   }
 
+  @Override
+  public String beginTransaction(CatalogTransaction.IsolationLevel isolationLevel) {
+    String txId = UUID.randomUUID().toString();
+    synchronized (this) {
+      activeTransactions.put(txId, Maps.newHashMap(tables));
+    }
+    return txId;
+  }
+
+  @Override
+  public CatalogTransaction createTransaction(CatalogTransaction.IsolationLevel isolationLevel) {
+    String txId = beginTransaction(isolationLevel);
+    return new BaseCatalogTransaction(this, isolationLevel, txId);
+  }
+
+  @Override
+  public Table loadTableInTransaction(TableIdentifier identifier, String transactionId) {
+    if (!activeTransactions.containsKey(transactionId)) {
+      throw new IllegalArgumentException("Transaction does not exist: " + transactionId);
+    }
+    Table result;
+    if (isValidIdentifier(identifier)) {
+      TableOperations ops = new InMemoryTableOperations(io, identifier, transactionId);
+      if (ops.current() == null) {
+        // the identifier may be valid for both tables and metadata tables
+        if (isValidMetadataIdentifier(identifier)) {
+          result = loadMetadataTable(identifier);
+        } else {
+          throw new NoSuchTableException("Table does not exist: %s", identifier);
+        }
+
+      } else {
+        result = new BaseTable(ops, fullTableName(name(), identifier), metricsReporter());
+      }
+
+    } else if (isValidMetadataIdentifier(identifier)) {
+      result = loadMetadataTable(identifier);
+    } else {
+      throw new NoSuchTableException("Invalid table identifier: %s", identifier);
+    }
+    return result;
+  }
+
   private class InMemoryTableOperations extends BaseMetastoreTableOperations {
     private final FileIO fileIO;
     private final TableIdentifier tableIdentifier;
     private final String fullTableName;
+    private final String transactionId;
 
     InMemoryTableOperations(FileIO fileIO, TableIdentifier tableIdentifier) {
+      this(fileIO, tableIdentifier, null);
+    }
+
+    InMemoryTableOperations(FileIO fileIO, TableIdentifier tableIdentifier, String transactionId) {
       this.fileIO = fileIO;
       this.tableIdentifier = tableIdentifier;
       this.fullTableName = fullTableName(catalogName, tableIdentifier);
+      this.transactionId = transactionId;
     }
 
     @Override
     public void doRefresh() {
-      String latestLocation = tables.get(tableIdentifier);
+      String latestLocation;
+      if (transactionId != null) {
+        latestLocation = activeTransactions.get(transactionId).get(tableIdentifier);
+      } else {
+        latestLocation = tables.get(tableIdentifier);
+      }
       if (latestLocation == null) {
         disableRefresh();
       } else {

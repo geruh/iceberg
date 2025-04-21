@@ -93,4 +93,8 @@ public class ResourcePaths {
   public String commitTransaction() {
     return SLASH.join("v1", prefix, "transactions", "commit");
   }
+
+  public String beginTransaction() {
+    return SLASH.join("v1", prefix, "transactions");
+  }
 }

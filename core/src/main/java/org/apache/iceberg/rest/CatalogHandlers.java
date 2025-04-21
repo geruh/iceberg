@@ -42,7 +42,9 @@ import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.Transaction;
 import org.apache.iceberg.UpdateRequirement;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.CatalogTransaction;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsCatalogTransactions;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
@@ -58,6 +60,7 @@ import org.apache.iceberg.rest.requests.RegisterTableRequest;
 import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.BeginTransactionResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
 import org.apache.iceberg.rest.responses.ListNamespacesResponse;
@@ -253,8 +256,15 @@ public class CatalogHandlers {
     }
   }
 
-  public static LoadTableResponse loadTable(Catalog catalog, TableIdentifier ident) {
-    Table table = catalog.loadTable(ident);
+  public static LoadTableResponse loadTable(
+      Catalog catalog, TableIdentifier ident, String transactionId) {
+    Table table;
+    if (transactionId != null) {
+      SupportsCatalogTransactions txCatalog = (SupportsCatalogTransactions) catalog;
+      table = txCatalog.loadTableInTransaction(ident, transactionId);
+    } else {
+      table = catalog.loadTable(ident);
+    }
 
     if (table instanceof BaseTable) {
       return LoadTableResponse.builder()
@@ -294,6 +304,15 @@ public class CatalogHandlers {
     }
 
     return LoadTableResponse.builder().withTableMetadata(finalMetadata).build();
+  }
+
+  public static BeginTransactionResponse beginTransaction(
+      Catalog catalog, CatalogTransaction.IsolationLevel isolationLevel) {
+    if (!(catalog instanceof SupportsCatalogTransactions)) {
+      throw new IllegalStateException("Catalog does not support transactions");
+    }
+    String txn = ((SupportsCatalogTransactions) catalog).beginTransaction(isolationLevel);
+    return BeginTransactionResponse.builder().withTransactionId(txn).build();
   }
 
   public static void renameTable(Catalog catalog, RenameTableRequest request) {

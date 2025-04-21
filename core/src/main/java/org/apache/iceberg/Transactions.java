@@ -59,6 +59,11 @@ public final class Transactions {
   }
 
   public static Transaction newTransaction(
+      String tableName, TableOperations ops, TableMetadata start) {
+    return new BaseTransaction(tableName, ops, TransactionType.SIMPLE, ops.refresh());
+  }
+
+  public static Transaction newTransaction(
       String tableName, TableOperations ops, MetricsReporter reporter) {
     return new BaseTransaction(tableName, ops, TransactionType.SIMPLE, ops.refresh(), reporter);
   }

@@ -94,7 +94,7 @@ public abstract class BaseMetastoreCatalog implements Catalog {
     return new BaseMetastoreCatalogTableBuilder(identifier, schema);
   }
 
-  private Table loadMetadataTable(TableIdentifier identifier) {
+  protected Table loadMetadataTable(TableIdentifier identifier) {
     String tableName = identifier.name();
     MetadataTableType type = MetadataTableType.from(tableName);
     if (type != null) {
@@ -111,7 +111,7 @@ public abstract class BaseMetastoreCatalog implements Catalog {
     }
   }
 
-  private boolean isValidMetadataIdentifier(TableIdentifier identifier) {
+  protected boolean isValidMetadataIdentifier(TableIdentifier identifier) {
     return MetadataTableType.from(identifier.name()) != null
         && isValidIdentifier(TableIdentifier.of(identifier.namespace().levels()));
   }
@@ -305,7 +305,7 @@ public abstract class BaseMetastoreCatalog implements Catalog {
     return sb.toString();
   }
 
-  private MetricsReporter metricsReporter() {
+  protected MetricsReporter metricsReporter() {
     if (metricsReporter == null) {
       metricsReporter = CatalogUtil.loadMetricsReporter(properties());
     }
