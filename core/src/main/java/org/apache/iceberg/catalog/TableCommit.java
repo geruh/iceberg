@@ -53,7 +53,15 @@ public interface TableCommit {
    */
   static TableCommit create(TableIdentifier identifier, TableMetadata base, TableMetadata updated) {
     Preconditions.checkArgument(null != identifier, "Invalid table identifier: null");
-    Preconditions.checkArgument(null != base && null != updated, "Invalid table metadata: null");
+    Preconditions.checkArgument(null != updated, "Invalid table metadata: null");
+    if (base == null) {
+      return ImmutableTableCommit.builder()
+          .identifier(identifier)
+          .requirements(UpdateRequirements.forCreateTable(updated.changes()))
+          .updates(updated.changes())
+          .build();
+    }
+
     Preconditions.checkArgument(
         base.uuid().equals(updated.uuid()),
         "UUID of base (%s) and updated (%s) table metadata does not match",

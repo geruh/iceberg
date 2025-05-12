@@ -149,6 +149,34 @@ public interface Catalog {
    * @param identifier a table identifier
    * @param schema a schema
    * @param spec a partition spec
+   * @param sortOrder a sort order
+   * @param location a location for the table; leave null if unspecified
+   * @param properties a string map of table properties
+   * @return a {@link Transaction} to create the table
+   * @throws AlreadyExistsException if the table already exists
+   */
+  default Transaction newCreateTableTransaction(
+      TableIdentifier identifier,
+      Schema schema,
+      PartitionSpec spec,
+      SortOrder sortOrder,
+      String location,
+      Map<String, String> properties) {
+
+    return buildTable(identifier, schema)
+        .withPartitionSpec(spec)
+        .withLocation(location)
+        .withSortOrder(sortOrder)
+        .withProperties(properties)
+        .createTransaction();
+  }
+
+  /**
+   * Start a transaction to create a table.
+   *
+   * @param identifier a table identifier
+   * @param schema a schema
+   * @param spec a partition spec
    * @param properties a string map of table properties
    * @return a {@link Transaction} to create the table
    * @throws AlreadyExistsException if the table already exists

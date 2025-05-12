@@ -120,6 +120,14 @@ public class BaseTransaction implements Transaction {
     return ops;
   }
 
+  public boolean hasUpdates() {
+    if (type == TransactionType.CREATE_TABLE) {
+      return true;
+    }
+    // For replace and simple, check if metadata changed
+    return base != current;
+  }
+
   private void checkLastOperationCommitted(String operation) {
     Preconditions.checkState(
         hasLastOpCommitted, "Cannot create new %s: last operation has not committed", operation);
@@ -330,10 +338,7 @@ public class BaseTransaction implements Transaction {
       // create table never needs to retry because the table has no previous state. because retries
       // are not a
       // concern, it is safe to delete all of the deleted files from individual operations
-      Tasks.foreach(deletedFiles)
-          .suppressFailureWhenFinished()
-          .onFailure((file, exc) -> LOG.warn("Failed to delete uncommitted file: {}", file, exc))
-          .run(ops.io()::deleteFile);
+      cleanUpUncommittedFiles();
     }
   }
 
@@ -386,10 +391,7 @@ public class BaseTransaction implements Transaction {
       // replace table never needs to retry because the table state is completely replaced. because
       // retries are not
       // a concern, it is safe to delete all of the deleted files from individual operations
-      Tasks.foreach(deletedFiles)
-          .suppressFailureWhenFinished()
-          .onFailure((file, exc) -> LOG.warn("Failed to delete uncommitted file: {}", file, exc))
-          .run(ops.io()::deleteFile);
+      cleanUpUncommittedFiles();
     }
   }
 
@@ -471,13 +473,10 @@ public class BaseTransaction implements Transaction {
     cleanAllUpdates();
 
     // delete all the uncommitted files
-    Tasks.foreach(deletedFiles)
-        .suppressFailureWhenFinished()
-        .onFailure((file, exc) -> LOG.warn("Failed to delete uncommitted file: {}", file, exc))
-        .run(ops.io()::deleteFile);
+    cleanUpUncommittedFiles();
   }
 
-  private void cleanAllUpdates() {
+  public void cleanAllUpdates() {
     Tasks.foreach(updates)
         .suppressFailureWhenFinished()
         .run(
@@ -488,7 +487,14 @@ public class BaseTransaction implements Transaction {
             });
   }
 
-  private void applyUpdates(TableOperations underlyingOps) {
+  public void cleanUpUncommittedFiles() {
+    Tasks.foreach(deletedFiles)
+        .suppressFailureWhenFinished()
+        .onFailure((file, exc) -> LOG.warn("Failed to delete uncommitted file: {}", file, exc))
+        .run(underlyingOps().io()::deleteFile);
+  }
+
+  public void applyUpdates(TableOperations underlyingOps) {
     if (base != underlyingOps.refresh()) {
       // use refreshed the metadata
       this.base = underlyingOps.current();
@@ -597,7 +603,8 @@ public class BaseTransaction implements Transaction {
 
     @Override
     public TableScan newScan() {
-      throw new UnsupportedOperationException("Transaction tables do not support scans");
+      return new DataTableScan(
+          this, schema(), ImmutableTableScanContext.builder().metricsReporter(reporter).build());
     }
 
     @Override

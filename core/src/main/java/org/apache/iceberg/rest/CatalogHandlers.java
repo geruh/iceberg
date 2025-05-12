@@ -42,22 +42,28 @@ import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.Transaction;
 import org.apache.iceberg.UpdateRequirement;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.ImmutableTableCommit;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsCatalogTransactions;
 import org.apache.iceberg.catalog.SupportsNamespaces;
+import org.apache.iceberg.catalog.TableCommit;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
+import org.apache.iceberg.rest.requests.CommitTransactionRequest;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
 import org.apache.iceberg.rest.requests.RegisterTableRequest;
 import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.CatalogSequenceNumberResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
 import org.apache.iceberg.rest.responses.ListNamespacesResponse;
@@ -298,6 +304,29 @@ public class CatalogHandlers {
 
   public static void renameTable(Catalog catalog, RenameTableRequest request) {
     catalog.renameTable(request.source(), request.destination());
+  }
+
+  public static CatalogSequenceNumberResponse catalogSequenceNumber(
+      SupportsCatalogTransactions catalog) {
+    Long catalogSequenceNumber = catalog.catalogSequenceNumber();
+    return CatalogSequenceNumberResponse.builder()
+        .withCatalogSequenceNumber(catalogSequenceNumber)
+        .build();
+  }
+
+  public static void commitTransaction(
+      SupportsCatalogTransactions catalog, CommitTransactionRequest request) {
+    request.validate();
+    List<TableCommit> commits = Lists.newArrayListWithCapacity(request.tableChanges().size());
+    for (UpdateTableRequest tableUpdate : request.tableChanges()) {
+      commits.add(
+          ImmutableTableCommit.builder()
+              .identifier(tableUpdate.identifier())
+              .addAllRequirements(tableUpdate.requirements())
+              .addAllUpdates(tableUpdate.updates())
+              .build());
+    }
+    catalog.multiTableCommit(commits);
   }
 
   private static boolean isCreate(UpdateTableRequest request) {

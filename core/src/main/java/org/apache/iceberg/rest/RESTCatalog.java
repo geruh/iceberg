@@ -25,13 +25,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import org.apache.iceberg.CatalogProperties;
+import org.apache.iceberg.IsolationLevel;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.Transaction;
+import org.apache.iceberg.catalog.BaseCatalogTransaction;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.CatalogTransaction;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SessionCatalog;
+import org.apache.iceberg.catalog.SupportsCatalogTransactions;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableCommit;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -40,8 +44,14 @@ import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.hadoop.Configurable;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
+import org.apache.iceberg.rest.responses.CatalogSequenceNumberResponse;
 
-public class RESTCatalog implements Catalog, SupportsNamespaces, Configurable<Object>, Closeable {
+public class RESTCatalog
+    implements Catalog,
+        SupportsNamespaces,
+        SupportsCatalogTransactions,
+        Configurable<Object>,
+        Closeable {
   private final RESTSessionCatalog sessionCatalog;
   private final Catalog delegate;
   private final SupportsNamespaces nsDelegate;
@@ -260,5 +270,26 @@ public class RESTCatalog implements Catalog, SupportsNamespaces, Configurable<Ob
   public void commitTransaction(TableCommit... commits) {
     sessionCatalog.commitTransaction(
         context, ImmutableList.<TableCommit>builder().add(commits).build());
+  }
+
+  @Override
+  public Long catalogSequenceNumber() {
+    CatalogSequenceNumberResponse response = sessionCatalog.catalogSequenceNumber(context);
+    return response.catalogSequenceNumber();
+  }
+
+  @Override
+  public Table loadTable(TableIdentifier identifier, long sequenceNumber) {
+    return sessionCatalog.loadTable(context, identifier, sequenceNumber);
+  }
+
+  @Override
+  public CatalogTransaction beginTransaction(IsolationLevel isolationLevel) {
+    return new BaseCatalogTransaction(this, isolationLevel);
+  }
+
+  @Override
+  public void multiTableCommit(List<TableCommit> commits) {
+    sessionCatalog.commitTransaction(context, commits);
   }
 }

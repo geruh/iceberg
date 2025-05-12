@@ -68,7 +68,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 public abstract class CatalogTests<C extends Catalog & SupportsNamespaces> {
-  private static final Namespace NS = Namespace.of("newdb");
+  protected static final Namespace NS = Namespace.of("newdb");
   protected static final TableIdentifier TABLE = TableIdentifier.of(NS, "table");
   private static final TableIdentifier RENAMED_TABLE = TableIdentifier.of(NS, "table_renamed");
 
@@ -122,7 +122,7 @@ public abstract class CatalogTests<C extends Catalog & SupportsNamespaces> {
           .withRecordCount(2) // needs at least one record or else metrics will filter it out
           .build();
 
-  static final DataFile FILE_B =
+  protected static final DataFile FILE_B =
       DataFiles.builder(SPEC)
           .withPath("/path/to/data-b.parquet")
           .withFileSizeInBytes(10)

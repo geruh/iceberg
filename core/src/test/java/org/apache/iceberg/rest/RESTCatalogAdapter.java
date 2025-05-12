@@ -29,6 +29,7 @@ import org.apache.iceberg.Transaction;
 import org.apache.iceberg.Transactions;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsCatalogTransactions;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
@@ -54,6 +55,7 @@ import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.ReportMetricsRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.CatalogSequenceNumberResponse;
 import org.apache.iceberg.rest.responses.ConfigResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.ErrorResponse;
@@ -89,11 +91,16 @@ public class RESTCatalogAdapter implements RESTClient {
 
   private final Catalog catalog;
   private final SupportsNamespaces asNamespaceCatalog;
+  private final SupportsCatalogTransactions asTransactionCatalog;
 
   public RESTCatalogAdapter(Catalog catalog) {
     this.catalog = catalog;
     this.asNamespaceCatalog =
         catalog instanceof SupportsNamespaces ? (SupportsNamespaces) catalog : null;
+    this.asTransactionCatalog =
+        catalog instanceof SupportsCatalogTransactions
+            ? (SupportsCatalogTransactions) catalog
+            : null;
   }
 
   enum HTTPMethod {
@@ -145,7 +152,9 @@ public class RESTCatalogAdapter implements RESTClient {
         ReportMetricsRequest.class,
         null),
     COMMIT_TRANSACTION(
-        HTTPMethod.POST, "v1/transactions/commit", CommitTransactionRequest.class, null);
+        HTTPMethod.POST, "v1/transactions/commit", CommitTransactionRequest.class, null),
+    CATALOG_SEQUENCE_NUMBER(
+        HTTPMethod.GET, "v1/catalog-sequence-number", null, CatalogSequenceNumberResponse.class);
 
     private final HTTPMethod method;
     private final int requiredLength;
@@ -223,7 +232,7 @@ public class RESTCatalogAdapter implements RESTClient {
     }
   }
 
-  @SuppressWarnings("MethodLength")
+  @SuppressWarnings({"MethodLength", "checkstyle:CyclomaticComplexity"})
   public <T extends RESTResponse> T handleRequest(
       Route route, Map<String, String> vars, Object body, Class<T> responseType) {
     switch (route) {
@@ -382,9 +391,22 @@ public class RESTCatalogAdapter implements RESTClient {
 
       case COMMIT_TRANSACTION:
         {
-          CommitTransactionRequest request = castRequest(CommitTransactionRequest.class, body);
-          commitTransaction(catalog, request);
+          if (asTransactionCatalog != null) {
+            CommitTransactionRequest request = castRequest(CommitTransactionRequest.class, body);
+            CatalogHandlers.commitTransaction(asTransactionCatalog, request);
+          } else {
+            CommitTransactionRequest request = castRequest(CommitTransactionRequest.class, body);
+            commitTransaction(catalog, request);
+          }
           return null;
+        }
+      case CATALOG_SEQUENCE_NUMBER:
+        {
+          if (asTransactionCatalog != null) {
+            return castResponse(
+                responseType, CatalogHandlers.catalogSequenceNumber(asTransactionCatalog));
+          }
+          break;
         }
 
       default:

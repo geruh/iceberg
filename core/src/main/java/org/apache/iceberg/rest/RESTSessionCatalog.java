@@ -65,6 +65,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.rest.auth.OAuth2Properties;
 import org.apache.iceberg.rest.auth.OAuth2Util;
 import org.apache.iceberg.rest.auth.OAuth2Util.AuthSession;
@@ -76,6 +77,7 @@ import org.apache.iceberg.rest.requests.RegisterTableRequest;
 import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
+import org.apache.iceberg.rest.responses.CatalogSequenceNumberResponse;
 import org.apache.iceberg.rest.responses.ConfigResponse;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
@@ -296,7 +298,14 @@ public class RESTSessionCatalog extends BaseSessionCatalog
   }
 
   private LoadTableResponse loadInternal(
-      SessionContext context, TableIdentifier identifier, SnapshotMode mode) {
+      SessionContext context,
+      TableIdentifier identifier,
+      SnapshotMode mode,
+      Long catalogSequenceNumber) {
+    Map<String, String> params = Maps.newHashMap(mode.params());
+    if (catalogSequenceNumber != null) {
+      params.put("catalog-sequence-number", String.valueOf(catalogSequenceNumber));
+    }
     return client.get(
         paths.table(identifier),
         mode.params(),
@@ -305,15 +314,14 @@ public class RESTSessionCatalog extends BaseSessionCatalog
         ErrorHandlers.tableErrorHandler());
   }
 
-  @Override
-  public Table loadTable(SessionContext context, TableIdentifier identifier) {
+  public Table loadTable(SessionContext context, TableIdentifier identifier, Long sequenceNumber) {
     checkIdentifierIsValid(identifier);
 
     MetadataTableType metadataType;
     LoadTableResponse response;
     TableIdentifier loadedIdent;
     try {
-      response = loadInternal(context, identifier, snapshotMode);
+      response = loadInternal(context, identifier, snapshotMode, sequenceNumber);
       loadedIdent = identifier;
       metadataType = null;
 
@@ -323,7 +331,7 @@ public class RESTSessionCatalog extends BaseSessionCatalog
         // attempt to load a metadata table using the identifier's namespace as the base table
         TableIdentifier baseIdent = TableIdentifier.of(identifier.namespace().levels());
         try {
-          response = loadInternal(context, baseIdent, snapshotMode);
+          response = loadInternal(context, baseIdent, snapshotMode, sequenceNumber);
           loadedIdent = baseIdent;
         } catch (NoSuchTableException ignored) {
           // the base table does not exist
@@ -346,7 +354,7 @@ public class RESTSessionCatalog extends BaseSessionCatalog
               .setPreviousFileLocation(null)
               .setSnapshotsSupplier(
                   () ->
-                      loadInternal(context, finalIdentifier, SnapshotMode.ALL)
+                      loadInternal(context, finalIdentifier, SnapshotMode.ALL, sequenceNumber)
                           .tableMetadata()
                           .snapshots())
               .discardChanges()
@@ -375,6 +383,11 @@ public class RESTSessionCatalog extends BaseSessionCatalog
     }
 
     return table;
+  }
+
+  @Override
+  public Table loadTable(SessionContext context, TableIdentifier identifier) {
+    return loadTable(context, identifier, null);
   }
 
   private void trackFileIO(RESTTableOperations ops) {
@@ -539,6 +552,14 @@ public class RESTSessionCatalog extends BaseSessionCatalog
     return refreshExecutor;
   }
 
+  public CatalogSequenceNumberResponse catalogSequenceNumber(SessionContext context) {
+    return client.get(
+        paths.catalogSequenceNumber(),
+        CatalogSequenceNumberResponse.class,
+        headers(context),
+        ErrorHandlers.defaultErrorHandler());
+  }
+
   @Override
   public void close() throws IOException {
     shutdownRefreshExecutor();
@@ -680,14 +701,18 @@ public class RESTSessionCatalog extends BaseSessionCatalog
               meta);
 
       trackFileIO(ops);
-
+      // keep the metadata changes staged in the metadata
+      // alternatively we can ignore the above and follow the base metastore builder closer
+      TableMetadata metadata =
+          TableMetadata.newTableMetadata(
+              meta.schema(), meta.spec(), meta.sortOrder(), meta.location(), meta.properties());
       return Transactions.createTableTransaction(
-          fullName, ops, meta, metricsReporter(paths.metrics(ident), session::headers));
+          fullName, ops, metadata, metricsReporter(paths.metrics(ident), session::headers));
     }
 
     @Override
     public Transaction replaceTransaction() {
-      LoadTableResponse response = loadInternal(context, ident, snapshotMode);
+      LoadTableResponse response = loadInternal(context, ident, snapshotMode, null);
       String fullName = fullTableName(ident);
 
       AuthSession session = tableSession(response.config(), session(context));

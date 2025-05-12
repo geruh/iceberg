@@ -110,11 +110,7 @@ class RESTTableOperations implements TableOperations {
       case CREATE:
         Preconditions.checkState(
             base == null, "Invalid base metadata for create transaction, expected null: %s", base);
-        updates =
-            ImmutableList.<MetadataUpdate>builder()
-                .addAll(createChanges)
-                .addAll(metadata.changes())
-                .build();
+        updates = ImmutableList.<MetadataUpdate>builder().addAll(metadata.changes()).build();
         requirements = UpdateRequirements.forCreateTable(updates);
         errorHandler = ErrorHandlers.tableErrorHandler(); // throws NoSuchTableException
         break;
