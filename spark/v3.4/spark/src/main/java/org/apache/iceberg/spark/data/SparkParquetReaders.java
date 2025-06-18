@@ -135,6 +135,7 @@ public class SparkParquetReaders {
     }
 
     @Override
+    @SuppressWarnings("checkstyle:CyclomaticComplexity")
     public ParquetValueReader<?> struct(
         Types.StructType expected, GroupType struct, List<ParquetValueReader<?>> fieldReaders) {
       // match the expected struct's order
@@ -170,6 +171,13 @@ public class SparkParquetReaders {
               maxDefinitionLevelsById.getOrDefault(id, defaultMaxDefinitionLevel);
           reorderedFields.add(
               ParquetValueReaders.constant(idToConstant.get(id), fieldMaxDefinitionLevel));
+        } else if (id == MetadataColumns.ROW_ID.fieldId()) {
+          Long baseRowId = (Long) idToConstant.get(id);
+          reorderedFields.add(ParquetValueReaders.rowIds(baseRowId, reader));
+        } else if (id == MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.fieldId()) {
+          Long baseRowId = (Long) idToConstant.get(MetadataColumns.ROW_ID.fieldId());
+          Long fileSeqNumber = (Long) idToConstant.get(id);
+          reorderedFields.add(ParquetValueReaders.lastUpdated(baseRowId, fileSeqNumber, reader));
         } else if (id == MetadataColumns.ROW_POSITION.fieldId()) {
           reorderedFields.add(ParquetValueReaders.position());
         } else if (id == MetadataColumns.IS_DELETED.fieldId()) {
