@@ -408,14 +408,22 @@ public class SparkScanBuilder
 
   private Scan buildBatchScan() {
     Schema expectedSchema = schemaWithMetadataColumns();
-    return new SparkBatchQueryScan(
-        spark,
-        table,
-        buildIcebergBatchScan(false /* not include Column Stats */, expectedSchema),
-        readConf,
-        expectedSchema,
-        filterExpressions,
-        metricsReporter::scanReport);
+      SparkBatchQueryScan scan =
+              new SparkBatchQueryScan(
+                      spark,
+                      table,
+                      buildIcebergBatchScan(false /* not include Column Stats */, expectedSchema),
+                      readConf,
+                      expectedSchema,
+                      filterExpressions,
+                      metricsReporter::scanReport);
+
+      // Pass variant extractions to the scan if present
+      if (pushedVariantExtractions != null && pushedVariantExtractions.length > 0) {
+          scan.setVariantExtractions(pushedVariantExtractions);
+      }
+
+      return scan;
   }
 
   private org.apache.iceberg.Scan buildIcebergBatchScan(boolean withStats, Schema expectedSchema) {

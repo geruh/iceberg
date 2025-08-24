@@ -74,7 +74,9 @@ import org.apache.spark.sql.connector.read.SupportsPushDownAggregates;
 import org.apache.spark.sql.connector.read.SupportsPushDownLimit;
 import org.apache.spark.sql.connector.read.SupportsPushDownRequiredColumns;
 import org.apache.spark.sql.connector.read.SupportsPushDownV2Filters;
+import org.apache.spark.sql.connector.read.SupportsPushDownVariantExtractions;
 import org.apache.spark.sql.connector.read.SupportsReportStatistics;
+import org.apache.spark.sql.connector.read.VariantExtraction;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -87,7 +89,8 @@ public class SparkScanBuilder
         SupportsPushDownV2Filters,
         SupportsPushDownRequiredColumns,
         SupportsReportStatistics,
-        SupportsPushDownLimit {
+        SupportsPushDownLimit,
+        SupportsPushDownVariantExtractions {
 
   private static final Logger LOG = LoggerFactory.getLogger(SparkScanBuilder.class);
   private static final Predicate[] NO_PREDICATES = new Predicate[0];
@@ -105,6 +108,7 @@ public class SparkScanBuilder
   private List<Expression> filterExpressions = null;
   private Predicate[] pushedPredicates = NO_PREDICATES;
   private Integer limit = null;
+  private VariantExtraction[] pushedVariantExtractions = null;
 
   SparkScanBuilder(
       SparkSession spark,
@@ -323,6 +327,37 @@ public class SparkScanBuilder
     }
 
     return true;
+  }
+
+  @Override
+  public boolean[] pushVariantExtractions(VariantExtraction[] extractions) {
+    if (extractions == null || extractions.length == 0) {
+      return new boolean[0];
+    }
+
+    // For now, accept all extractions
+    // TODO: Add logic to validate and filter based on:
+    // - Path complexity (only simple paths like $.field.nested)
+    // - Whether fields are actually shredded
+    // - Type compatibility
+    boolean[] accepted = new boolean[extractions.length];
+    for (int i = 0; i < extractions.length; i++) {
+      VariantExtraction extraction = extractions[i];
+      String path = extraction.metadata().getString("path");
+
+      // Log the extraction for debugging
+      LOG.info(
+          "Variant extraction pushed: column={}, path={}, type={}",
+          String.join(".", extraction.columnName()),
+          path,
+          extraction.expectedDataType());
+
+      // Accept all for now - actual filtering will happen in the scan
+      accepted[i] = true;
+    }
+
+    this.pushedVariantExtractions = extractions;
+    return accepted;
   }
 
   @Override
