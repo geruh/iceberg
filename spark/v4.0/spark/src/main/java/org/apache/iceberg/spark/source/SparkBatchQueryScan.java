@@ -73,6 +73,7 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
   private final Long asOfTimestamp;
   private final String tag;
   private final List<Expression> runtimeFilterExpressions;
+  private VariantExtraction[] variantExtractions;
 
   SparkBatchQueryScan(
       SparkSession spark,
@@ -180,7 +181,30 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
     return rewritableDeletes;
   }
 
-  // for DVs all position deletes must be rewritten
+    /**
+     * Sets the variant extractions that were pushed down from Spark.
+     * This is called by SparkScanBuilder after pushVariantExtractions succeeds.
+     *
+     * @param extractions the variant extractions to apply
+     */
+    void setVariantExtractions(VariantExtraction[] extractions) {
+        this.variantExtractions = extractions;
+        if (extractions != null && extractions.length > 0) {
+            LOG.info(
+                    "Variant extractions set for table {}: {} extraction(s)",
+                    table().name(),
+                    extractions.length);
+        }
+    }
+
+    /**
+     * Returns the variant extractions that have been pushed down, or null if none.
+     */
+    VariantExtraction[] variantExtractions() {
+        return variantExtractions;
+    }
+
+    // for DVs all position deletes must be rewritten
   // for position deletes, only file-scoped deletes must be rewritten
   private boolean shouldRewrite(DeleteFile deleteFile, boolean forDVs) {
     if (forDVs) {

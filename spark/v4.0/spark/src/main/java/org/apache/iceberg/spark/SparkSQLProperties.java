@@ -107,6 +107,16 @@ public class SparkSQLProperties {
   public static final String REPORT_COLUMN_STATS = "spark.sql.iceberg.report-column-stats";
   public static final boolean REPORT_COLUMN_STATS_DEFAULT = true;
 
+  // Controls whether to shred variant columns during write operations
+  public static final String SHRED_VARIANTS = "spark.sql.iceberg.shred-variants";
+  public static final boolean SHRED_VARIANTS_DEFAULT = true;
+
+  // Controls the buffer size for variant schema inference during writes
+  // This determines how many rows are buffered before inferring shredded schema
+  public static final String VARIANT_INFERENCE_BUFFER_SIZE =
+      "spark.sql.iceberg.variant.inference.buffer-size";
+  public static final int VARIANT_INFERENCE_BUFFER_SIZE_DEFAULT = 10;
+
   // Prefix for custom snapshot properties
   public static final String SNAPSHOT_PROPERTY_PREFIX = "spark.sql.iceberg.snapshot-property.";
 }
