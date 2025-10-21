@@ -185,7 +185,6 @@ public class TestHiveCommitLocks {
                 overriddenHiveConf,
                 spyCachedClientPool,
                 ops.io(),
-                null,
                 catalog.name(),
                 dbName,
                 tableName));
@@ -616,7 +615,6 @@ public class TestHiveCommitLocks {
                 confWithLock,
                 spyCachedClientPool,
                 ops.io(),
-                null,
                 catalog.name(),
                 TABLE_IDENTIFIER.namespace().level(0),
                 TABLE_IDENTIFIER.name()));
