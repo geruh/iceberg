@@ -238,16 +238,22 @@ public class Spark3Util {
         add.isNullable(),
         "Incompatible change: cannot add required column: %s",
         leafName(add.fieldNames()));
+    Type type = SparkSchemaUtil.convert(add.dataType());
+
+    // Convert Spark default value to Iceberg Literal if present
+    org.apache.iceberg.expressions.Literal<?> defaultValue = null;
     if (add.defaultValue() != null) {
-      throw new UnsupportedOperationException(
-          String.format(
-              "Cannot add column %s since setting default values in Spark is currently unsupported",
-              leafName(add.fieldNames())));
+      defaultValue =
+          SparkSchemaUtil.convertSparkDefaultValueToLiteral(
+              add.defaultValue(), type, leafName(add.fieldNames()));
     }
 
-    Type type = SparkSchemaUtil.convert(add.dataType());
     pendingUpdate.addColumn(
-        parentName(add.fieldNames()), leafName(add.fieldNames()), type, add.comment());
+        parentName(add.fieldNames()),
+        leafName(add.fieldNames()),
+        type,
+        add.comment(),
+        defaultValue);
 
     if (add.position() instanceof TableChange.After) {
       TableChange.After after = (TableChange.After) add.position();
