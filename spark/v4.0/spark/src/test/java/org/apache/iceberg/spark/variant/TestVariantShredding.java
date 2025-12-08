@@ -51,8 +51,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class TestVariantShredding extends CatalogTestBase {
+  private static final Logger LOG = LoggerFactory.getLogger(TestVariantShredding.class);
 
   private static final Schema SCHEMA =
       new Schema(
@@ -255,6 +258,182 @@ public class TestVariantShredding extends CatalogTestBase {
 
     Table table = validationCatalog.loadTable(tableIdent);
     verifyParquetSchema(table, expectedSchema);
+  }
+
+  @TestTemplate
+  public void testVariantShreddingNestedObjects() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    String values =
+        "(1, parse_json('{\"person\": {\"name\": \"Alice\", \"contact\": {\"email\": \"a@test.com\"}}}'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    Object result =
+        scalarSql(
+            "SELECT try_variant_get(address, '$.person.contact.email', 'string') FROM %s",
+            tableName);
+    assertThat(result).isEqualTo("a@test.com");
+  }
+
+  @TestTemplate
+  public void testVariantShreddingEmptyObject() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // Test empty JSON object
+    String values = "(1, parse_json('{}'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Empty object should still be readable
+    Object result = scalarSql("SELECT address FROM %s WHERE id = 1", tableName);
+    assertThat(result).isNotNull();
+  }
+
+  @TestTemplate
+  public void testVariantShreddingAllNulls() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // All variant values are null - should not crash
+    String values = "(1, null), (2, null), (3, null)";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Should produce unshredded schema since no data to infer from
+    GroupType address = variant("address", 2);
+    MessageType expectedSchema = parquetSchema(address);
+
+    Table table = validationCatalog.loadTable(tableIdent);
+    verifyParquetSchema(table, expectedSchema);
+  }
+
+  @TestTemplate
+  public void testVariantShreddingReadBackVerification() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // Write complex data
+    String values =
+        "(1, parse_json('{\"name\": \"Test\", \"count\": 42, \"active\": true, \"tags\": [\"a\", \"b\"]}')), "
+            + "(2, parse_json('{\"name\": \"Other\", \"count\": 100, \"active\": false, \"tags\": []}'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Verify all fields can be read back correctly
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.name', 'string') FROM %s WHERE id = 1",
+                tableName))
+        .isEqualTo("Test");
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.count', 'int') FROM %s WHERE id = 1",
+                tableName))
+        .isEqualTo(42);
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.active', 'boolean') FROM %s WHERE id = 1",
+                tableName))
+        .isEqualTo(true);
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.name', 'string') FROM %s WHERE id = 2",
+                tableName))
+        .isEqualTo("Other");
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.count', 'int') FROM %s WHERE id = 2",
+                tableName))
+        .isEqualTo(100);
+  }
+
+  @TestTemplate
+  public void testVariantShreddingPrimitiveValue() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // Test non-object variant (just a primitive value)
+    String values = "(1, parse_json('\"hello\"')), (2, parse_json('42'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Primitives should be stored in value column, not shredded
+    Object result1 = scalarSql("SELECT address FROM %s WHERE id = 1", tableName);
+    Object result2 = scalarSql("SELECT address FROM %s WHERE id = 2", tableName);
+    assertThat(result1).isNotNull();
+    assertThat(result2).isNotNull();
+  }
+
+  @TestTemplate
+  public void testVariantShreddingMixedArrayTypes() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // Test array with mixed types - should work but might not fully shred
+    String values = "(1, parse_json('{\"items\": [1, \"two\", 3.0, true]}'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Verify read works
+    Object result =
+        scalarSql("SELECT try_variant_get(address, '$.items[0]', 'int') FROM %s", tableName);
+     assertThat(result).isEqualTo(1);
+  }
+
+  /**
+   * Test that verifies schema inference behavior when first non-null value has fewer fields than
+   * subsequent values.
+   *
+   * <p>Current limitation: Only the first non-null variant value is used for schema inference, so
+   * fields that only appear in later rows won't be shredded.
+   */
+  @TestTemplate
+  public void testVariantShreddingSchemaInferenceFromFirstNonNull() throws IOException {
+    spark.conf().set(SparkSQLProperties.SHRED_VARIANTS, "true");
+
+    // First row has only 'name', second row has 'name' AND 'age'
+    // Schema inference uses first non-null, so 'age' might not be shredded
+    String values =
+        "(1, parse_json('{\"name\": \"Alice\"}')), "
+            + "(2, parse_json('{\"name\": \"Bob\", \"age\": 30}'))";
+    sql("INSERT INTO %s VALUES %s", tableName, values);
+
+    // Verify both fields can be read (data integrity)
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.name', 'string') FROM %s WHERE id = 1",
+                tableName))
+        .isEqualTo("Alice");
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.name', 'string') FROM %s WHERE id = 2",
+                tableName))
+        .isEqualTo("Bob");
+    assertThat(
+            scalarSql(
+                "SELECT try_variant_get(address, '$.age', 'int') FROM %s WHERE id = 2", tableName))
+        .isEqualTo(30);
+
+    // Check the Parquet schema to see what was actually shredded
+    Table table = validationCatalog.loadTable(tableIdent);
+    try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+      FileScanTask task = tasks.iterator().next();
+      String path = task.file().location();
+
+      HadoopInputFile inputFile =
+          HadoopInputFile.fromPath(new org.apache.hadoop.fs.Path(path), new Configuration());
+
+      try (ParquetFileReader reader = ParquetFileReader.open(inputFile)) {
+        MessageType schema = reader.getFileMetaData().getSchema();
+        GroupType address = schema.getType("address").asGroupType();
+        GroupType typedValue = address.getType("typed_value").asGroupType();
+
+        // Log what was actually shredded for visibility
+        LOG.info("Shredded fields in typed_value: {}", typedValue.getFieldCount());
+        for (Type field : typedValue.getFields()) {
+          LOG.info("  - {}", field.getName());
+        }
+
+        // Current behavior: only 'name' is shredded (from first non-null value)
+        // This documents the current limitation
+        assertThat(typedValue.containsField("name"))
+            .as("'name' should be shredded (present in first non-null)")
+            .isTrue();
+        // Note: 'age' is NOT shredded because it's not in the first non-null value
+        // This is a known limitation - see SchemaInferenceVisitor.java:143-170
+      }
+    }
   }
 
   private void verifyParquetSchema(Table table, MessageType expectedSchema) throws IOException {

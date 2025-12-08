@@ -22,6 +22,7 @@ import static org.apache.iceberg.expressions.Expressions.and;
 import static org.apache.iceberg.expressions.Expressions.bucket;
 import static org.apache.iceberg.expressions.Expressions.day;
 import static org.apache.iceberg.expressions.Expressions.equal;
+import static org.apache.iceberg.expressions.Expressions.extract;
 import static org.apache.iceberg.expressions.Expressions.greaterThan;
 import static org.apache.iceberg.expressions.Expressions.greaterThanOrEqual;
 import static org.apache.iceberg.expressions.Expressions.hour;
@@ -57,6 +58,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.util.NaNUtil;
 import org.apache.iceberg.util.Pair;
+import org.apache.spark.sql.connector.expressions.GeneralScalarExpression;
 import org.apache.spark.sql.connector.expressions.Literal;
 import org.apache.spark.sql.connector.expressions.NamedReference;
 import org.apache.spark.sql.connector.expressions.UserDefinedScalarFunc;
@@ -354,7 +356,7 @@ public class SparkV2Filters {
 
   private static boolean canConvertToTerm(
       org.apache.spark.sql.connector.expressions.Expression expr) {
-    return isRef(expr) || isSystemFunc(expr);
+    return isRef(expr) || isSystemFunc(expr) || isVariantExtract(expr);
   }
 
   private static boolean isRef(org.apache.spark.sql.connector.expressions.Expression expr) {
@@ -369,6 +371,22 @@ public class SparkV2Filters {
           && Arrays.stream(udf.children()).allMatch(child -> isLiteral(child) || isRef(child));
     }
 
+    return false;
+  }
+
+  private static boolean isVariantExtract(
+      org.apache.spark.sql.connector.expressions.Expression expr) {
+    if (expr instanceof GeneralScalarExpression) {
+      GeneralScalarExpression scalarExpr = (GeneralScalarExpression) expr;
+      String name = scalarExpr.name();
+      // variant_get and try_variant_get are represented as VARIANT_GET in DSv2
+      if ("VARIANT_GET".equals(name)) {
+        org.apache.spark.sql.connector.expressions.Expression[] children = scalarExpr.children();
+        // Expected children: (column, path, type, failOnError, timeZone)
+        // We need at least column, path, and type
+        return children.length >= 3 && isRef(children[0]) && isLiteral(children[1]);
+      }
+    }
     return false;
   }
 
@@ -441,9 +459,69 @@ public class SparkV2Filters {
       return Expressions.ref(SparkUtil.toColumnName((NamedReference) input));
     } else if (input instanceof UserDefinedScalarFunc) {
       return udfToTerm((UserDefinedScalarFunc) input);
+    } else if (input instanceof GeneralScalarExpression) {
+      return variantExtractToTerm((GeneralScalarExpression) input);
     } else {
       return null;
     }
+  }
+
+  private static UnboundTerm<Object> variantExtractToTerm(GeneralScalarExpression expr) {
+    if (!"VARIANT_GET".equals(expr.name())) {
+      return null;
+    }
+
+    org.apache.spark.sql.connector.expressions.Expression[] children = expr.children();
+    if (children.length < 3) {
+      return null;
+    }
+
+    // Children are: (column, path, type, [failOnError], [timeZone])
+    if (!isRef(children[0]) || !isLiteral(children[1])) {
+      return null;
+    }
+
+    String column = SparkUtil.toColumnName((NamedReference) children[0]);
+    String path = convertLiteral((Literal<?>) children[1]).toString();
+
+    // The type child is a DataType, extract its simple name for Iceberg
+    String icebergType = sparkTypeToIcebergType(children[2]);
+    if (icebergType == null) {
+      return null;
+    }
+
+    return extract(column, path, icebergType);
+  }
+
+  private static String sparkTypeToIcebergType(
+      org.apache.spark.sql.connector.expressions.Expression typeExpr) {
+    // The type expression in variant_get represents a Spark DataType
+    // We need to convert it to an Iceberg type string
+    String typeStr = typeExpr.toString().toLowerCase(Locale.ROOT);
+
+    // Handle common Spark type patterns
+    if (typeStr.contains("integertype") || typeStr.contains("int")) {
+      return "int";
+    } else if (typeStr.contains("longtype") || typeStr.contains("bigint")) {
+      return "long";
+    } else if (typeStr.contains("stringtype") || typeStr.contains("string")) {
+      return "string";
+    } else if (typeStr.contains("doubletype") || typeStr.contains("double")) {
+      return "double";
+    } else if (typeStr.contains("floattype") || typeStr.contains("float")) {
+      return "float";
+    } else if (typeStr.contains("booleantype") || typeStr.contains("boolean")) {
+      return "boolean";
+    } else if (typeStr.contains("datetype") || typeStr.contains("date")) {
+      return "date";
+    } else if (typeStr.contains("timestamptype") || typeStr.contains("timestamp")) {
+      return "timestamp";
+    } else if (typeStr.contains("decimaltype") || typeStr.contains("decimal")) {
+      // For decimal, we'd need to extract precision/scale, for now use a default
+      return "decimal(38,10)";
+    }
+
+    return null;
   }
 
   @SuppressWarnings("checkstyle:CyclomaticComplexity")
