@@ -29,6 +29,7 @@ import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTest
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Streams;
 
 public class PathUtil {
@@ -50,7 +51,7 @@ public class PathUtil {
   private static final Splitter DOT = Splitter.on(".");
   private static final String ROOT = "$";
 
-  static List<String> parse(String path) {
+  public static List<String> parse(String path) {
     Preconditions.checkArgument(path != null, "Invalid path: null");
     Preconditions.checkArgument(
         !path.contains("[") && !path.contains("]"), "Unsupported path, contains bracket: %s", path);
@@ -71,8 +72,7 @@ public class PathUtil {
           path,
           name);
     }
-
-    return names;
+    return Lists.newArrayList(names);
   }
 
   public static String toNormalizedPath(Iterable<String> fields) {

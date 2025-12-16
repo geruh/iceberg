@@ -163,6 +163,11 @@ public abstract class ParquetVariantVisitor<R> {
   /** Handler called after visiting any primitive or group type. */
   public void afterField(Type type) {}
 
+  public boolean shouldVisitField(String fieldName) {
+    // TODO: determine if this is actually needed. prolly not
+    return true;
+  }
+
   public static <R> R visit(GroupType type, ParquetVariantVisitor<R> visitor) {
     Preconditions.checkArgument(
         ParquetSchemaUtil.hasField(type, METADATA), "Invalid variant, missing metadata: %s", type);
@@ -255,6 +260,13 @@ public abstract class ParquetVariantVisitor<R> {
     for (Type fieldType : fields.getFields()) {
       Preconditions.checkArgument(
           !fieldType.isPrimitive(), "Invalid shredded object field, not a group: %s", fieldType);
+
+      // need to rethink
+      if (!visitor.shouldVisitField(fieldType.getName())) {
+        results.add(null);
+        continue;
+      }
+
       R fieldResult =
           withBeforeAndAfter(
               () -> visitValue(fieldType.asGroupType(), visitor), fieldType, visitor);

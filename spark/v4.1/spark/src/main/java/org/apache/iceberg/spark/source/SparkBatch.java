@@ -19,7 +19,9 @@
 package org.apache.iceberg.spark.source;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.MetadataColumns;
@@ -27,7 +29,9 @@ import org.apache.iceberg.ScanTask;
 import org.apache.iceberg.ScanTaskGroup;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SchemaParser;
+import org.apache.iceberg.expressions.VariantAccessInfo;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.spark.ImmutableOrcBatchReadConf;
 import org.apache.iceberg.spark.ImmutableParquetBatchReadConf;
 import org.apache.iceberg.spark.OrcBatchReadConf;
@@ -57,6 +61,7 @@ class SparkBatch implements Batch {
   private final boolean executorCacheLocalityEnabled;
   private final int scanHashCode;
   private final boolean cacheDeleteFilesOnExecutors;
+  private final Set<VariantAccessInfo> variantAccesses;
 
   SparkBatch(
       JavaSparkContext sparkContext,
@@ -66,6 +71,26 @@ class SparkBatch implements Batch {
       List<? extends ScanTaskGroup<?>> taskGroups,
       Schema expectedSchema,
       int scanHashCode) {
+    this(
+        sparkContext,
+        table,
+        readConf,
+        groupingKeyType,
+        taskGroups,
+        expectedSchema,
+        scanHashCode,
+        ImmutableSet.of());
+  }
+
+  SparkBatch(
+      JavaSparkContext sparkContext,
+      Table table,
+      SparkReadConf readConf,
+      Types.StructType groupingKeyType,
+      List<? extends ScanTaskGroup<?>> taskGroups,
+      Schema expectedSchema,
+      int scanHashCode,
+      Set<VariantAccessInfo> variantAccesses) {
     this.sparkContext = sparkContext;
     this.table = table;
     this.branch = readConf.branch();
@@ -78,6 +103,7 @@ class SparkBatch implements Batch {
     this.executorCacheLocalityEnabled = readConf.executorCacheLocalityEnabled();
     this.scanHashCode = scanHashCode;
     this.cacheDeleteFilesOnExecutors = readConf.cacheDeleteFilesOnExecutors();
+    this.variantAccesses = variantAccesses;
   }
 
   @Override
@@ -100,7 +126,8 @@ class SparkBatch implements Batch {
               expectedSchemaString,
               caseSensitive,
               locations != null ? locations[index] : SparkPlanningUtil.NO_LOCATION_PREFERENCE,
-              cacheDeleteFilesOnExecutors);
+              cacheDeleteFilesOnExecutors,
+              variantAccesses);
     }
 
     return partitions;

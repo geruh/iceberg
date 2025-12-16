@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark.source;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataTask;
@@ -26,10 +27,12 @@ import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.ScanTaskGroup;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.expressions.VariantAccessInfo;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.spark.source.metrics.TaskNumDeletes;
 import org.apache.iceberg.spark.source.metrics.TaskNumSplits;
 import org.apache.iceberg.util.SnapshotUtil;
@@ -44,6 +47,7 @@ class RowDataReader extends BaseRowReader<FileScanTask> implements PartitionRead
   private static final Logger LOG = LoggerFactory.getLogger(RowDataReader.class);
 
   private final long numSplits;
+  private final Set<VariantAccessInfo> variantAccessSet;
 
   RowDataReader(SparkInputPartition partition) {
     this(
@@ -52,7 +56,8 @@ class RowDataReader extends BaseRowReader<FileScanTask> implements PartitionRead
         SnapshotUtil.schemaFor(partition.table(), partition.branch()),
         partition.expectedSchema(),
         partition.isCaseSensitive(),
-        partition.cacheDeleteFilesOnExecutors());
+        partition.cacheDeleteFilesOnExecutors(),
+        partition.variantAccesses());
   }
 
   RowDataReader(
@@ -62,12 +67,36 @@ class RowDataReader extends BaseRowReader<FileScanTask> implements PartitionRead
       Schema expectedSchema,
       boolean caseSensitive,
       boolean cacheDeleteFilesOnExecutors) {
+    this(
+        table,
+        taskGroup,
+        tableSchema,
+        expectedSchema,
+        caseSensitive,
+        cacheDeleteFilesOnExecutors,
+        ImmutableSet.of());
+  }
+
+  RowDataReader(
+      Table table,
+      ScanTaskGroup<FileScanTask> taskGroup,
+      Schema tableSchema,
+      Schema expectedSchema,
+      boolean caseSensitive,
+      boolean cacheDeleteFilesOnExecutors,
+      Set<VariantAccessInfo> variantAccesses) {
 
     super(
         table, taskGroup, tableSchema, expectedSchema, caseSensitive, cacheDeleteFilesOnExecutors);
 
     numSplits = taskGroup.tasks().size();
+    this.variantAccessSet = variantAccesses;
     LOG.debug("Reading {} file split(s) for table {}", numSplits, table.name());
+  }
+
+  @Override
+  protected Set<VariantAccessInfo> variantAccesses() {
+    return variantAccessSet;
   }
 
   @Override

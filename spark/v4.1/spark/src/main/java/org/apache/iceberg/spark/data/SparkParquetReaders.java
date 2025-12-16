@@ -25,7 +25,10 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.expressions.VariantAccessInfo;
+import org.apache.iceberg.parquet.Parquet;
 import org.apache.iceberg.parquet.ParquetSchemaUtil;
 import org.apache.iceberg.parquet.ParquetValueReader;
 import org.apache.iceberg.parquet.ParquetValueReaders;
@@ -43,6 +46,7 @@ import org.apache.iceberg.parquet.TypeWithSchemaVisitor;
 import org.apache.iceberg.parquet.VariantReaderBuilder;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.spark.SparkUtil;
@@ -74,6 +78,44 @@ import org.apache.spark.unsafe.types.VariantVal;
 public class SparkParquetReaders {
   private SparkParquetReaders() {}
 
+  // TODO: Can refactor
+  public static Parquet.ReadBuilder.ReaderFunction readerFunction(Map<Integer, ?> idToConstant) {
+    return readerFunction(idToConstant, ImmutableSet.of());
+  }
+
+  public static Parquet.ReadBuilder.ReaderFunction readerFunction(
+      Map<Integer, ?> idToConstant, Set<VariantAccessInfo> variantAccesses) {
+    return new SparkReaderFunction(idToConstant, variantAccesses);
+  }
+
+  /**
+   * A ReaderFunction implementation for Spark that supports variant column pruning.
+   *
+   * <p>This class implements the Parquet ReaderFunction interface, creating readers that prune
+   * shredded variant columns based on the requested variant accesses.
+   */
+  private static class SparkReaderFunction implements Parquet.ReadBuilder.ReaderFunction {
+    private final Map<Integer, ?> idToConstant;
+    private final Set<VariantAccessInfo> variantAccesses;
+    private Schema schema;
+
+    SparkReaderFunction(Map<Integer, ?> idToConstant, Set<VariantAccessInfo> variantAccesses) {
+      this.idToConstant = idToConstant;
+      this.variantAccesses = variantAccesses != null ? variantAccesses : ImmutableSet.of();
+    }
+
+    @Override
+    public Parquet.ReadBuilder.ReaderFunction withSchema(Schema newSchema) {
+      this.schema = newSchema;
+      return this;
+    }
+
+    @Override
+    public java.util.function.Function<MessageType, ParquetValueReader<?>> apply() {
+      return fileSchema -> buildReader(schema, fileSchema, idToConstant, variantAccesses);
+    }
+  }
+
   public static ParquetValueReader<InternalRow> buildReader(
       Schema expectedSchema, MessageType fileSchema) {
     return buildReader(expectedSchema, fileSchema, ImmutableMap.of());
@@ -82,22 +124,41 @@ public class SparkParquetReaders {
   @SuppressWarnings("unchecked")
   public static ParquetValueReader<InternalRow> buildReader(
       Schema expectedSchema, MessageType fileSchema, Map<Integer, ?> idToConstant) {
+    return buildReader(expectedSchema, fileSchema, idToConstant, ImmutableSet.of());
+  }
+
+
+  @SuppressWarnings("unchecked")
+  public static ParquetValueReader<InternalRow> buildReader(
+      Schema expectedSchema,
+      MessageType fileSchema,
+      Map<Integer, ?> idToConstant,
+      Set<VariantAccessInfo> variantAccesses) {
     if (ParquetSchemaUtil.hasIds(fileSchema)) {
       return (ParquetValueReader<InternalRow>)
           TypeWithSchemaVisitor.visit(
-              expectedSchema.asStruct(), fileSchema, new ReadBuilder(fileSchema, idToConstant));
+              expectedSchema.asStruct(),
+              fileSchema,
+              new ReadBuilder(fileSchema, idToConstant, variantAccesses));
     } else {
       return (ParquetValueReader<InternalRow>)
           TypeWithSchemaVisitor.visit(
               expectedSchema.asStruct(),
               fileSchema,
-              new FallbackReadBuilder(fileSchema, idToConstant));
+              new FallbackReadBuilder(fileSchema, idToConstant, variantAccesses));
     }
   }
 
   private static class FallbackReadBuilder extends ReadBuilder {
     FallbackReadBuilder(MessageType type, Map<Integer, ?> idToConstant) {
       super(type, idToConstant);
+    }
+
+    FallbackReadBuilder(
+        MessageType type,
+        Map<Integer, ?> idToConstant,
+        Set<VariantAccessInfo> variantAccesses) {
+      super(type, idToConstant, variantAccesses);
     }
 
     @Override
@@ -127,10 +188,20 @@ public class SparkParquetReaders {
   private static class ReadBuilder extends TypeWithSchemaVisitor<ParquetValueReader<?>> {
     private final MessageType type;
     private final Map<Integer, ?> idToConstant;
+    // Set of variant accesses that should be read
+    private final Set<VariantAccessInfo> variantAccesses;
 
     ReadBuilder(MessageType type, Map<Integer, ?> idToConstant) {
+      this(type, idToConstant, ImmutableSet.of());
+    }
+
+    ReadBuilder(
+        MessageType type,
+        Map<Integer, ?> idToConstant,
+        Set<VariantAccessInfo> variantAccesses) {
       this.type = type;
       this.idToConstant = idToConstant;
+      this.variantAccesses = variantAccesses;
     }
 
     @Override
@@ -229,7 +300,24 @@ public class SparkParquetReaders {
 
     @Override
     public ParquetVariantVisitor<ParquetValueReader<?>> variantVisitor() {
-      return new VariantReaderBuilder(type, Arrays.asList(currentPath()));
+      String[] path = currentPath();
+      VariantReaderBuilder builder = new VariantReaderBuilder(type, Arrays.asList(path));
+
+      // Apply column pruning if accesses are specified for this variant column
+      if (!variantAccesses.isEmpty() && path.length > 0) {
+        String columnName = path[path.length - 1];
+        // Filter accesses to only those for this column
+        //TODO: maybe there is a better way to derive
+        Set<VariantAccessInfo> accessesForColumn =
+            variantAccesses.stream()
+                .filter(access -> access.columnName().equals(columnName))
+                .collect(ImmutableSet.toImmutableSet());
+        if (!accessesForColumn.isEmpty()) {
+          builder.withRequestedAccesses(accessesForColumn);
+        }
+      }
+
+      return builder;
     }
 
     @Override

@@ -21,8 +21,9 @@ package org.apache.iceberg.parquet;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
+import java.util.Set;
 import java.util.stream.Stream;
+import org.apache.iceberg.expressions.VariantAccessInfo;
 import org.apache.iceberg.parquet.ParquetVariantReaders.VariantValueReader;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Streams;
@@ -41,15 +42,62 @@ import org.apache.parquet.schema.LogicalTypeAnnotation.UUIDLogicalTypeAnnotation
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class VariantReaderBuilder extends ParquetVariantVisitor<ParquetValueReader<?>> {
+  private static final Logger LOG = LoggerFactory.getLogger(VariantReaderBuilder.class);
+
   private final MessageType schema;
   private final Iterable<String> basePath;
   private final Deque<String> fieldNames = Lists.newLinkedList();
+  // Variant accesses that should be read. If null, all paths are read (no pruning).
+  private Set<VariantAccessInfo> requestedAccesses;
 
   public VariantReaderBuilder(MessageType schema, Iterable<String> basePath) {
     this.schema = schema;
     this.basePath = basePath;
+  }
+
+  /**
+   * Sets the variant accesses that should be read for column pruning when set, only the shredded columns needed
+   * to read these paths will be read. Unrequested shredded columns will be skipped
+   * TODO: revisit interface return this for tests
+   */
+  public VariantReaderBuilder withRequestedAccesses(Set<VariantAccessInfo> accesses) {
+    this.requestedAccesses = accesses;
+    return this;
+  }
+
+  @Override
+  public boolean shouldVisitField(String fieldName) {
+    if (requestedAccesses == null) {
+      return true; // No pruning, visit all fields
+    }
+
+    // Build the logical path (excluding Parquet structural elements like "typed_value")
+    // The fieldNames deque may contain structural elements that are not part of the JSON path
+    List<String> logicalPathElements = Lists.newArrayList();
+    for (String name : fieldNames) {
+      // Skip Parquet structural elements that don't correspond to JSON path elements
+      if (!TYPED_VALUE.equals(name) && !VALUE.equals(name) && !LIST.equals(name)) {
+        logicalPathElements.add(name);
+      }
+    }
+    logicalPathElements.add(fieldName);
+
+    // Check if any requested access matches for pruning purposes
+    // This allows visiting intermediate nodes (e.g., "address" when "address.city" is requested)
+    for (VariantAccessInfo access : requestedAccesses) {
+      if (access.matchesForPruning(logicalPathElements)) {
+        LOG.debug(
+            "Variant column pruning: INCLUDE field '{}' (path: {})", fieldName, logicalPathElements);
+        return true;
+      }
+    }
+
+    LOG.debug("Variant column pruning: SKIP field '{}' (path: {})", fieldName, logicalPathElements);
+    return false;
   }
 
   @Override
@@ -149,12 +197,23 @@ public class VariantReaderBuilder extends ParquetVariantVisitor<ParquetValueRead
         valueReader != null ? schema.getMaxDefinitionLevel(path(VALUE)) - 1 : Integer.MAX_VALUE;
     int fieldsDL = schema.getMaxDefinitionLevel(path(TYPED_VALUE)) - 1;
 
-    List<String> shreddedFieldNames =
-        group.getType(TYPED_VALUE).asGroupType().getFields().stream()
-            .map(Type::getName)
-            .collect(Collectors.toList());
-    List<VariantValueReader> fieldReaders =
-        fieldResults.stream().map(VariantValueReader.class::cast).collect(Collectors.toList());
+    // filter out null results these are fields that were skipped for column pruning
+    List<Type> parquetFields = group.getType(TYPED_VALUE).asGroupType().getFields();
+    List<String> shreddedFieldNames = Lists.newArrayList();
+    List<VariantValueReader> fieldReaders = Lists.newArrayList();
+
+    for (int i = 0; i < fieldResults.size(); i++) {
+      ParquetValueReader<?> reader = fieldResults.get(i);
+      if (reader != null) {
+        shreddedFieldNames.add(parquetFields.get(i).getName());
+        fieldReaders.add((VariantValueReader) reader);
+      }
+    }
+
+    // If no fields are included, we still need to read the variant from the value column
+    if (fieldReaders.isEmpty()) {
+      return ParquetVariantReaders.shredded(valueDL, valueReader, Integer.MAX_VALUE, null);
+    }
 
     return ParquetVariantReaders.objects(
         valueDL, valueReader, fieldsDL, shreddedFieldNames, fieldReaders);

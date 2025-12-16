@@ -77,6 +77,8 @@ import org.apache.spark.sql.connector.read.SupportsPushDownV2Filters;
 import org.apache.spark.sql.connector.read.SupportsPushDownVariantExtractions;
 import org.apache.spark.sql.connector.read.SupportsReportStatistics;
 import org.apache.spark.sql.connector.read.VariantExtraction;
+import org.apache.spark.sql.execution.datasources.VariantMetadata;
+import org.apache.spark.sql.execution.datasources.VariantMetadata$;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -335,28 +337,36 @@ public class SparkScanBuilder
       return new boolean[0];
     }
 
-    // For now, accept all extractions
-    // TODO: Add logic to validate and filter based on:
-    // - Path complexity (only simple paths like $.field.nested)
-    // - Whether fields are actually shredded
-    // - Type compatibility
+    // TODO: complexity here need to revisit
+    // Here we're not going to accept any extractions because Spark will perform variant
+    // get extraction post read for now. However, this needs to be investigated further.
     boolean[] accepted = new boolean[extractions.length];
     for (int i = 0; i < extractions.length; i++) {
       VariantExtraction extraction = extractions[i];
-      String path = extraction.metadata().getString("path");
+      VariantMetadata variantMetadata =
+          VariantMetadata$.MODULE$.fromMetadata(extraction.metadata());
+      String path = variantMetadata.path();
 
-      // Log the extraction for debugging
-      LOG.info(
-          "Variant extraction pushed: column={}, path={}, type={}",
+      LOG.debug(
+          "Variant extraction received for column pruning: column={}, path={}, type={}",
           String.join(".", extraction.columnName()),
           path,
           extraction.expectedDataType());
 
-      // Accept all for now - actual filtering will happen in the scan
-      accepted[i] = true;
+      accepted[i] = false;
     }
 
-    this.pushedVariantExtractions = extractions;
+    // Merge with existing extractions
+    if (pushedVariantExtractions != null && pushedVariantExtractions.length > 0) {
+      VariantExtraction[] merged =
+          new VariantExtraction[pushedVariantExtractions.length + extractions.length];
+      System.arraycopy(pushedVariantExtractions, 0, merged, 0, pushedVariantExtractions.length);
+      System.arraycopy(extractions, 0, merged, pushedVariantExtractions.length, extractions.length);
+      this.pushedVariantExtractions = merged;
+    } else {
+      this.pushedVariantExtractions = extractions;
+    }
+
     return accepted;
   }
 
@@ -443,14 +453,21 @@ public class SparkScanBuilder
 
   private Scan buildBatchScan() {
     Schema expectedSchema = schemaWithMetadataColumns();
-    return new SparkBatchQueryScan(
-        spark,
-        table,
-        buildIcebergBatchScan(false /* not include Column Stats */, expectedSchema),
-        readConf,
-        expectedSchema,
-        filterExpressions,
-        metricsReporter::scanReport);
+    SparkBatchQueryScan scan =
+        new SparkBatchQueryScan(
+            spark,
+            table,
+            buildIcebergBatchScan(false /* not include Column Stats */, expectedSchema),
+            readConf,
+            expectedSchema,
+            filterExpressions,
+            metricsReporter::scanReport);
+
+    if (pushedVariantExtractions != null && pushedVariantExtractions.length > 0) {
+      scan.setVariantExtractions(pushedVariantExtractions);
+    }
+
+    return scan;
   }
 
   private org.apache.iceberg.Scan buildIcebergBatchScan(boolean withStats, Schema expectedSchema) {

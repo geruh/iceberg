@@ -41,6 +41,7 @@ import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Streams;
@@ -1593,5 +1594,33 @@ public class TestVariantReaders {
 
       throw new IllegalArgumentException("Invalid converted type: " + avro);
     }
+  }
+
+  @Test
+  public void testVariantReaderBuilderShouldVisitField() {
+    // TODO: test if we can skip in readers
+    GroupType fieldA = field("name", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType fieldB = field("city", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    MessageType parquetSchema = parquetSchema(variant("var", 2, objectFields));
+
+    // Without requested paths, all fields should be visited
+    VariantReaderBuilder builder = new VariantReaderBuilder(parquetSchema, ImmutableList.of("var"));
+    assertThat(builder.shouldVisitField("name")).isTrue();
+    assertThat(builder.shouldVisitField("city")).isTrue();
+    assertThat(builder.shouldVisitField("anything")).isTrue();
+
+    // With requested paths, only matching fields should be visited
+    VariantReaderBuilder prunedBuilder =
+        new VariantReaderBuilder(parquetSchema, ImmutableList.of("var"));
+    // TODO: update to use the variantaccessinfo
+    //    prunedBuilder.withRequestedAccesses(
+//        ImmutableSet.of(ImmutableList.of("name"), ImmutableList.of("address", "city")));
+
+    // fail :(
+    assertThat(prunedBuilder.shouldVisitField("name")).isTrue();
+    assertThat(prunedBuilder.shouldVisitField("address")).isTrue();
+    assertThat(prunedBuilder.shouldVisitField("zip")).isFalse();
+    assertThat(prunedBuilder.shouldVisitField("other")).isFalse();
   }
 }

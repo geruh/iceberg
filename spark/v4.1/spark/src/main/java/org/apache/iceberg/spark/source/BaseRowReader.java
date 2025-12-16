@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark.source;
 
 import java.util.Map;
+import java.util.Set;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.MetadataColumns;
 import org.apache.iceberg.ScanTask;
@@ -27,10 +28,12 @@ import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.avro.Avro;
 import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.VariantAccessInfo;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.orc.ORC;
 import org.apache.iceberg.parquet.Parquet;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.spark.data.SparkOrcReader;
 import org.apache.iceberg.spark.data.SparkParquetReaders;
@@ -95,12 +98,22 @@ abstract class BaseRowReader<T extends ScanTask> extends BaseReader<InternalRow,
         .reuseContainers()
         .split(start, length)
         .project(readSchema)
-        .createReaderFunc(
-            fileSchema -> SparkParquetReaders.buildReader(readSchema, fileSchema, idToConstant))
+        .createReaderFunc(SparkParquetReaders.readerFunction(idToConstant, variantAccesses()))
         .filter(residual)
         .caseSensitive(caseSensitive())
         .withNameMapping(nameMapping())
         .build();
+  }
+
+  /**
+   * Returns the variant accesses for column pruning. Subclasses can override this to provide
+   * variant accesses that limit which shredded columns are read. The default implementation returns
+   * an empty set.
+   *
+   * @return a set of variant accesses to read
+   */
+  protected Set<VariantAccessInfo> variantAccesses() {
+    return ImmutableSet.of();
   }
 
   private CloseableIterable<InternalRow> newOrcIterable(

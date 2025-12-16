@@ -43,6 +43,7 @@ import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.ExpressionUtil;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Projections;
+import org.apache.iceberg.expressions.VariantAccessInfo;
 import org.apache.iceberg.metrics.ScanReport;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
@@ -51,14 +52,19 @@ import org.apache.iceberg.spark.Spark3Util;
 import org.apache.iceberg.spark.SparkReadConf;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.spark.SparkV2Filters;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.ContentFileUtil;
 import org.apache.iceberg.util.DeleteFileSet;
 import org.apache.iceberg.util.SnapshotUtil;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.connector.expressions.NamedReference;
 import org.apache.spark.sql.connector.expressions.filter.Predicate;
+import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.Statistics;
 import org.apache.spark.sql.connector.read.SupportsRuntimeV2Filtering;
+import org.apache.spark.sql.connector.read.VariantExtraction;
+import org.apache.spark.sql.execution.datasources.VariantMetadata;
+import org.apache.spark.sql.execution.datasources.VariantMetadata$;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,6 +79,7 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
   private final Long asOfTimestamp;
   private final String tag;
   private final List<Expression> runtimeFilterExpressions;
+  private VariantExtraction[] variantExtractions;
 
   SparkBatchQueryScan(
       SparkSession spark,
@@ -94,6 +101,86 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
 
   Long snapshotId() {
     return snapshotId;
+  }
+
+  /**
+   * Sets the variant extractions that Spark requested.
+   *
+   * <p>These extractions are used to prune shredded variant columns in Parquet for I/O
+   * optimization. When variant paths are specified, only the shredded columns needed for those
+   * paths are read.
+   *
+   * @param extractions the variant extractions that Spark requested
+   */
+  void setVariantExtractions(VariantExtraction[] extractions) {
+    this.variantExtractions = extractions;
+  }
+
+  /**
+   * Returns the variant extractions that Spark requested.
+   *
+   * @return the variant extractions, or null if none were requested
+   */
+  VariantExtraction[] variantExtractions() {
+    return variantExtractions;
+  }
+
+  @Override
+  public Batch toBatch() {
+    Set<VariantAccessInfo> variantAccesses = computeVariantAccesses();
+    return new SparkBatch(
+        sparkContext(),
+        table(),
+        readConf(),
+        groupingKeyType(),
+        taskGroups(),
+        expectedSchema(),
+        hashCode(),
+        variantAccesses);
+  }
+
+  private Set<VariantAccessInfo> computeVariantAccesses() {
+    if (variantExtractions == null || variantExtractions.length == 0) {
+      return Sets.newHashSet();
+    }
+
+    // TODO: revisit
+    // My thought process here is that we want to get the variant columns that are projected
+    // in the expected schema. And if a variant column is projected, then we cant prune it.
+    Set<String> projectedVariantColumns = Sets.newHashSet();
+    for (Types.NestedField field : expectedSchema().columns()) {
+//      if (Type.TypeID.VARIANT.equals(field.type().typeId())) {
+      if (field.type().isVariantType()) {
+        projectedVariantColumns.add(field.name());
+      }
+    }
+
+    Set<VariantAccessInfo> result = Sets.newHashSet();
+    for (VariantExtraction extraction : variantExtractions) {
+      String[] columnPath = extraction.columnName();
+      if (columnPath.length == 0) {
+        continue;
+      }
+
+      // The column name is the last element of the path
+      String columnName = columnPath[columnPath.length - 1];
+
+      // If this variant column is projected in the schema, we can't prune it
+      // The extractions might be from filters, not projections
+      if (projectedVariantColumns.contains(columnName)) {
+        continue;
+      }
+
+      // Parse the path from the extraction metadata
+      VariantMetadata metadata = VariantMetadata$.MODULE$.fromMetadata(extraction.metadata());
+      String jsonPath = metadata.path();
+      VariantAccessInfo accessInfo = VariantAccessInfo.parse(columnName, jsonPath);
+
+      if (!accessInfo.isRoot()) {
+        result.add(accessInfo);
+      }
+    }
+    return result;
   }
 
   @Override

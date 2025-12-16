@@ -19,11 +19,15 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.Serializable;
+import java.util.Map;
+import java.util.Set;
 import org.apache.iceberg.ScanTask;
 import org.apache.iceberg.ScanTaskGroup;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SchemaParser;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.expressions.VariantAccessInfo;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.types.Types;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -39,6 +43,8 @@ class SparkInputPartition implements InputPartition, HasPartitionKey, Serializab
   private final boolean caseSensitive;
   private final transient String[] preferredLocations;
   private final boolean cacheDeleteFilesOnExecutors;
+  // Set of variant accesses to read for column pruning
+  private final Set<VariantAccessInfo> variantAccesses;
 
   private transient Schema expectedSchema = null;
 
@@ -51,6 +57,28 @@ class SparkInputPartition implements InputPartition, HasPartitionKey, Serializab
       boolean caseSensitive,
       String[] preferredLocations,
       boolean cacheDeleteFilesOnExecutors) {
+    this(
+        groupingKeyType,
+        taskGroup,
+        tableBroadcast,
+        branch,
+        expectedSchemaString,
+        caseSensitive,
+        preferredLocations,
+        cacheDeleteFilesOnExecutors,
+        ImmutableSet.of());
+  }
+
+  SparkInputPartition(
+      Types.StructType groupingKeyType,
+      ScanTaskGroup<?> taskGroup,
+      Broadcast<Table> tableBroadcast,
+      String branch,
+      String expectedSchemaString,
+      boolean caseSensitive,
+      String[] preferredLocations,
+      boolean cacheDeleteFilesOnExecutors,
+      Set<VariantAccessInfo> variantAccesses) {
     this.groupingKeyType = groupingKeyType;
     this.taskGroup = taskGroup;
     this.tableBroadcast = tableBroadcast;
@@ -59,6 +87,7 @@ class SparkInputPartition implements InputPartition, HasPartitionKey, Serializab
     this.caseSensitive = caseSensitive;
     this.preferredLocations = preferredLocations;
     this.cacheDeleteFilesOnExecutors = cacheDeleteFilesOnExecutors;
+    this.variantAccesses = variantAccesses;
   }
 
   @Override
@@ -94,6 +123,10 @@ class SparkInputPartition implements InputPartition, HasPartitionKey, Serializab
 
   public boolean cacheDeleteFilesOnExecutors() {
     return cacheDeleteFilesOnExecutors;
+  }
+
+  public Set<VariantAccessInfo> variantAccesses() {
+    return variantAccesses;
   }
 
   public Schema expectedSchema() {

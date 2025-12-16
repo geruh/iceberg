@@ -137,6 +137,14 @@ abstract class SparkScan implements Scan, SupportsReportStatistics {
     return table;
   }
 
+  protected JavaSparkContext sparkContext() {
+    return sparkContext;
+  }
+
+  protected SparkReadConf readConf() {
+    return readConf;
+  }
+
   protected String branch() {
     return branch;
   }
