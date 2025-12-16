@@ -52,6 +52,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
+import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.spark.Spark3Util;
 import org.apache.iceberg.spark.SparkAggregates;
 import org.apache.iceberg.spark.SparkReadConf;
@@ -77,6 +78,8 @@ import org.apache.spark.sql.connector.read.SupportsPushDownV2Filters;
 import org.apache.spark.sql.connector.read.SupportsPushDownVariantExtractions;
 import org.apache.spark.sql.connector.read.SupportsReportStatistics;
 import org.apache.spark.sql.connector.read.VariantExtraction;
+import org.apache.spark.sql.execution.datasources.VariantMetadata;
+import org.apache.spark.sql.execution.datasources.VariantMetadata$;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -343,7 +346,8 @@ public class SparkScanBuilder
     boolean[] accepted = new boolean[extractions.length];
     for (int i = 0; i < extractions.length; i++) {
       VariantExtraction extraction = extractions[i];
-      String path = extraction.metadata().getString("path");
+      VariantMetadata variantMetadata = VariantMetadata$.MODULE$.fromMetadata(extraction.metadata());
+      String path = variantMetadata.path();
 
       // Log the extraction for debugging
       LOG.info(
@@ -443,7 +447,7 @@ public class SparkScanBuilder
 
   private Scan buildBatchScan() {
     Schema expectedSchema = schemaWithMetadataColumns();
-    return new SparkBatchQueryScan(
+    SparkBatchQueryScan scan = new SparkBatchQueryScan(
         spark,
         table,
         buildIcebergBatchScan(false /* not include Column Stats */, expectedSchema),
@@ -451,6 +455,12 @@ public class SparkScanBuilder
         expectedSchema,
         filterExpressions,
         metricsReporter::scanReport);
+    
+    if (pushedVariantExtractions != null && pushedVariantExtractions.length > 0) {
+      scan.setVariantExtractions(pushedVariantExtractions);
+    }
+    
+    return scan;
   }
 
   private org.apache.iceberg.Scan buildIcebergBatchScan(boolean withStats, Schema expectedSchema) {

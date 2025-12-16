@@ -59,6 +59,7 @@ import org.apache.spark.sql.connector.expressions.NamedReference;
 import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.sql.connector.read.Statistics;
 import org.apache.spark.sql.connector.read.SupportsRuntimeV2Filtering;
+import org.apache.spark.sql.connector.read.VariantExtraction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,6 +74,7 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
   private final Long asOfTimestamp;
   private final String tag;
   private final List<Expression> runtimeFilterExpressions;
+  private VariantExtraction[] variantExtractions;
 
   SparkBatchQueryScan(
       SparkSession spark,
@@ -94,6 +96,25 @@ class SparkBatchQueryScan extends SparkPartitioningAwareScan<PartitionScanTask>
 
   Long snapshotId() {
     return snapshotId;
+  }
+
+  /**
+   * Sets the variant extractions that were pushed down from Spark.
+   * This is called by SparkScanBuilder after pushVariantExtractions succeeds.
+   *
+   * @param extractions the variant extractions to store for use during scan execution
+   */
+  void setVariantExtractions(VariantExtraction[] extractions) {
+    this.variantExtractions = extractions;
+  }
+
+  /**
+   * Returns the variant extractions that were pushed down from Spark.
+   *
+   * @return the variant extractions, or null if none were pushed
+   */
+  VariantExtraction[] variantExtractions() {
+    return variantExtractions;
   }
 
   @Override
