@@ -65,7 +65,12 @@ public class UpdateTableRequestParser {
 
     gen.writeArrayFieldStart(UPDATES);
     for (MetadataUpdate metadataUpdate : request.updates()) {
-      MetadataUpdateParser.toJson(metadataUpdate, gen);
+      // Use specsById for ProduceSnapshotUpdate serialization if available
+      if (request.specsById() != null) {
+        MetadataUpdateParser.toJson(metadataUpdate, request.specsById(), gen);
+      } else {
+        MetadataUpdateParser.toJson(metadataUpdate, gen);
+      }
     }
     gen.writeEndArray();
 

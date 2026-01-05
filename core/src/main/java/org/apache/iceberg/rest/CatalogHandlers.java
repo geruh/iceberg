@@ -44,8 +44,10 @@ import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.BaseTransaction;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.IncrementalAppendScan;
+import org.apache.iceberg.MetadataUpdate;
 import org.apache.iceberg.MetadataUpdate.UpgradeFormatVersion;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.ProduceSnapshotUpdateHandler;
 import org.apache.iceberg.Scan;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
@@ -481,7 +483,22 @@ public class CatalogHandlers {
 
                 // apply changes
                 TableMetadata.Builder metadataBuilder = TableMetadata.buildFrom(base);
-                request.updates().forEach(update -> update.applyTo(metadataBuilder));
+                for (MetadataUpdate update : request.updates()) {
+                  if (update instanceof MetadataUpdate.ProduceSnapshotUpdate) {
+                    // ProduceSnapshotUpdate requires special handling
+                    MetadataUpdate.ProduceSnapshotUpdate produceUpdate =
+                        (org.apache.iceberg.MetadataUpdate.ProduceSnapshotUpdate) update;
+
+                    // Resolve the update if needed (parses JSON file nodes into DataFile/DeleteFile)
+                    MetadataUpdate.ProduceSnapshotUpdate resolved =
+                        ProduceSnapshotUpdateHandler.resolve(produceUpdate, base);
+
+                    // Apply the update using the handler
+                    ProduceSnapshotUpdateHandler.apply(taskOps, base, resolved, metadataBuilder);
+                  } else {
+                    update.applyTo(metadataBuilder);
+                  }
+                }
 
                 TableMetadata updated = metadataBuilder.build();
                 if (updated.changes().isEmpty()) {

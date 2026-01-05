@@ -21,9 +21,14 @@ package org.apache.iceberg;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.ExpressionParser;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.util.JsonUtil;
@@ -61,6 +66,7 @@ public class MetadataUpdateParser {
   static final String REMOVE_SCHEMAS = "remove-schemas";
   static final String ADD_ENCRYPTION_KEY = "add-encryption-key";
   static final String REMOVE_ENCRYPTION_KEY = "remove-encryption-key";
+  static final String PRODUCE_SNAPSHOT = "produce-snapshot";
 
   // AssignUUID
   private static final String UUID = "uuid";
@@ -140,6 +146,19 @@ public class MetadataUpdateParser {
   // RemoveEncryptionKey
   private static final String KEY_ID = "key-id";
 
+  // ProduceSnapshotUpdate
+  private static final String SNAPSHOT_ACTION = "snapshot-action";
+  private static final String ADD_DATA_FILES = "add-data-files";
+  private static final String ADD_DELETE_FILES = "add-delete-files";
+  private static final String REMOVE_DATA_FILES = "remove-data-files";
+  private static final String REMOVE_DELETE_FILES = "remove-delete-files";
+  private static final String DELETE_ROW_FILTER = "delete-row-filter";
+  private static final String STAGE_ONLY = "stage-only";
+  private static final String BRANCH = "branch";
+  private static final String SUMMARY = "summary";
+  private static final String BASE_SNAPSHOT_ID = "base-snapshot-id";
+  private static final String COMMIT_VALIDATIONS = "commit-validations";
+
   private static final Map<Class<? extends MetadataUpdate>, String> ACTIONS =
       ImmutableMap.<Class<? extends MetadataUpdate>, String>builder()
           .put(MetadataUpdate.AssignUUID.class, ASSIGN_UUID)
@@ -167,6 +186,7 @@ public class MetadataUpdateParser {
           .put(MetadataUpdate.RemoveSchemas.class, REMOVE_SCHEMAS)
           .put(MetadataUpdate.AddEncryptionKey.class, ADD_ENCRYPTION_KEY)
           .put(MetadataUpdate.RemoveEncryptionKey.class, REMOVE_ENCRYPTION_KEY)
+          .put(MetadataUpdate.ProduceSnapshotUpdate.class, PRODUCE_SNAPSHOT)
           .buildOrThrow();
 
   public static String toJson(MetadataUpdate metadataUpdate) {
@@ -175,6 +195,65 @@ public class MetadataUpdateParser {
 
   public static String toJson(MetadataUpdate metadataUpdate, boolean pretty) {
     return JsonUtil.generate(gen -> toJson(metadataUpdate, gen), pretty);
+  }
+
+  /**
+   * Converts a MetadataUpdate to JSON with partition spec context.
+   *
+   * <p>This overload is required for serializing resolved {@link
+   * MetadataUpdate.ProduceSnapshotUpdate} objects that contain DataFile/DeleteFile instances. The
+   * partition specs are needed to serialize the partition data correctly.
+   *
+   * @param metadataUpdate the update to serialize
+   * @param specsById partition specs by ID
+   * @return JSON string representation
+   */
+  public static String toJson(MetadataUpdate metadataUpdate, Map<Integer, PartitionSpec> specsById) {
+    return toJson(metadataUpdate, specsById, false);
+  }
+
+  /**
+   * Converts a MetadataUpdate to JSON with partition spec context.
+   *
+   * @param metadataUpdate the update to serialize
+   * @param specsById partition specs by ID
+   * @param pretty whether to format the output
+   * @return JSON string representation
+   */
+  public static String toJson(
+      MetadataUpdate metadataUpdate, Map<Integer, PartitionSpec> specsById, boolean pretty) {
+    return JsonUtil.generate(gen -> toJson(metadataUpdate, specsById, gen), pretty);
+  }
+
+  /**
+   * Writes a MetadataUpdate to JSON with partition spec context.
+   *
+   * @param metadataUpdate the update to serialize
+   * @param specsById partition specs by ID
+   * @param generator the JSON generator
+   * @throws IOException if serialization fails
+   */
+  public static void toJson(
+      MetadataUpdate metadataUpdate, Map<Integer, PartitionSpec> specsById, JsonGenerator generator)
+      throws IOException {
+    String updateAction = ACTIONS.get(metadataUpdate.getClass());
+    Preconditions.checkArgument(
+        updateAction != null,
+        "Cannot convert metadata update to json. Unrecognized metadata update type: %s",
+        metadataUpdate.getClass().getName());
+
+    generator.writeStartObject();
+    generator.writeStringField(ACTION, updateAction);
+
+    if (PRODUCE_SNAPSHOT.equals(updateAction)) {
+      writeProduceSnapshotUpdate(
+          (MetadataUpdate.ProduceSnapshotUpdate) metadataUpdate, specsById, generator);
+    } else {
+      // Delegate to standard toJson for non-file updates (specsById not needed)
+      writeUpdateContent(metadataUpdate, updateAction, generator);
+    }
+
+    generator.writeEndObject();
   }
 
   public static void toJson(MetadataUpdate metadataUpdate, JsonGenerator generator)
@@ -191,6 +270,14 @@ public class MetadataUpdateParser {
     generator.writeStartObject();
     generator.writeStringField(ACTION, updateAction);
 
+    writeUpdateContent(metadataUpdate, updateAction, generator);
+
+    generator.writeEndObject();
+  }
+
+  private static void writeUpdateContent(
+      MetadataUpdate metadataUpdate, String updateAction, JsonGenerator generator)
+      throws IOException {
     switch (updateAction) {
       case ASSIGN_UUID:
         writeAssignUUID((MetadataUpdate.AssignUUID) metadataUpdate, generator);
@@ -271,13 +358,15 @@ public class MetadataUpdateParser {
       case REMOVE_ENCRYPTION_KEY:
         writeRemoveEncryptionKey((MetadataUpdate.RemoveEncryptionKey) metadataUpdate, generator);
         break;
+      case PRODUCE_SNAPSHOT:
+        writeProduceSnapshotUpdate(
+            (MetadataUpdate.ProduceSnapshotUpdate) metadataUpdate, generator);
+        break;
       default:
         throw new IllegalArgumentException(
             String.format(
                 "Cannot convert metadata update to json. Unrecognized action: %s", updateAction));
     }
-
-    generator.writeEndObject();
   }
 
   /**
@@ -350,6 +439,8 @@ public class MetadataUpdateParser {
         return readAddEncryptionKey(jsonNode);
       case REMOVE_ENCRYPTION_KEY:
         return readRemoveEncryptionKey(jsonNode);
+      case PRODUCE_SNAPSHOT:
+        return readProduceSnapshotUpdate(jsonNode);
       default:
         throw new UnsupportedOperationException(
             String.format("Cannot convert metadata update action to json: %s", action));
@@ -666,5 +757,169 @@ public class MetadataUpdateParser {
   private static MetadataUpdate readRemoveEncryptionKey(JsonNode node) {
     String keyId = JsonUtil.getString(KEY_ID, node);
     return new MetadataUpdate.RemoveEncryptionKey(keyId);
+  }
+
+  private static void writeProduceSnapshotUpdate(
+      MetadataUpdate.ProduceSnapshotUpdate update, JsonGenerator gen) throws IOException {
+    writeProduceSnapshotUpdate(update, null, gen);
+  }
+
+  /**
+   * Writes a ProduceSnapshotUpdate to JSON.
+   *
+   * @param update the update to serialize
+   * @param specsById partition specs by ID, required for resolved updates
+   * @param gen the JSON generator
+   * @throws IOException if serialization fails
+   * @throws IllegalStateException if update is resolved but specsById is not provided
+   */
+  static void writeProduceSnapshotUpdate(
+      MetadataUpdate.ProduceSnapshotUpdate update,
+      Map<Integer, PartitionSpec> specsById,
+      JsonGenerator gen)
+      throws IOException {
+    gen.writeStringField(SNAPSHOT_ACTION, update.action());
+
+    if (update.isUnresolved()) {
+      // Unresolved: re-serialize the JSON nodes
+      writeJsonNodeArray(ADD_DATA_FILES, update.unresolvedAddDataFiles(), gen);
+      writeJsonNodeArray(ADD_DELETE_FILES, update.unresolvedAddDeleteFiles(), gen);
+      writeJsonNodeArray(REMOVE_DATA_FILES, update.unresolvedRemoveDataFiles(), gen);
+      writeJsonNodeArray(REMOVE_DELETE_FILES, update.unresolvedRemoveDeleteFiles(), gen);
+    } else {
+      // Resolved: serialize using ContentFileParser (requires specs)
+      Preconditions.checkState(
+          specsById != null,
+          "Cannot serialize resolved ProduceSnapshotUpdate without partition specs. "
+              + "Use toJson(update, specsById, generator) instead.");
+      writeContentFileArray(ADD_DATA_FILES, update.addDataFiles(), specsById, gen);
+      writeContentFileArray(ADD_DELETE_FILES, update.addDeleteFiles(), specsById, gen);
+      writeContentFileArray(REMOVE_DATA_FILES, update.removeDataFiles(), specsById, gen);
+      writeContentFileArray(REMOVE_DELETE_FILES, update.removeDeleteFiles(), specsById, gen);
+    }
+
+    if (update.deleteRowFilter() != null) {
+      gen.writeFieldName(DELETE_ROW_FILTER);
+      ExpressionParser.toJson(update.deleteRowFilter(), gen);
+    }
+
+    gen.writeBooleanField(STAGE_ONLY, update.stageOnly());
+
+    if (update.branch() != null) {
+      gen.writeStringField(BRANCH, update.branch());
+    }
+
+    if (update.summary() != null && !update.summary().isEmpty()) {
+      JsonUtil.writeStringMap(SUMMARY, update.summary(), gen);
+    }
+
+    if (update.baseSnapshotId() != null) {
+      gen.writeNumberField(BASE_SNAPSHOT_ID, update.baseSnapshotId());
+    }
+
+    if (update.validations() != null && !update.validations().isEmpty()) {
+      gen.writeArrayFieldStart(COMMIT_VALIDATIONS);
+      for (org.apache.iceberg.rest.CommitValidation validation : update.validations()) {
+        org.apache.iceberg.rest.CommitValidationParser.toJson(validation, gen);
+      }
+      gen.writeEndArray();
+    }
+  }
+
+  private static void writeJsonNodeArray(
+      String fieldName, List<JsonNode> nodes, JsonGenerator gen) throws IOException {
+    if (nodes != null && !nodes.isEmpty()) {
+      gen.writeArrayFieldStart(fieldName);
+      for (JsonNode node : nodes) {
+        gen.writeTree(node);
+      }
+      gen.writeEndArray();
+    }
+  }
+
+  private static <T extends ContentFile<?>> void writeContentFileArray(
+      String fieldName,
+      List<T> files,
+      Map<Integer, PartitionSpec> specsById,
+      JsonGenerator gen)
+      throws IOException {
+    if (files != null && !files.isEmpty()) {
+      gen.writeArrayFieldStart(fieldName);
+      for (T file : files) {
+        PartitionSpec spec = specsById.get(file.specId());
+        Preconditions.checkArgument(
+            spec != null, "Cannot find partition spec for spec-id: %s", file.specId());
+        ContentFileParser.toJson(file, spec, gen);
+      }
+      gen.writeEndArray();
+    }
+  }
+
+  private static MetadataUpdate readProduceSnapshotUpdate(JsonNode node) {
+    Preconditions.checkArgument(
+        node.hasNonNull(SNAPSHOT_ACTION), "Missing required field: %s", SNAPSHOT_ACTION);
+
+    String action = JsonUtil.getString(SNAPSHOT_ACTION, node);
+
+    List<JsonNode> addDataFiles = readJsonNodeArray(ADD_DATA_FILES, node);
+    List<JsonNode> addDeleteFiles = readJsonNodeArray(ADD_DELETE_FILES, node);
+    List<JsonNode> removeDataFiles = readJsonNodeArray(REMOVE_DATA_FILES, node);
+    List<JsonNode> removeDeleteFiles = readJsonNodeArray(REMOVE_DELETE_FILES, node);
+
+    Expression deleteRowFilter = null;
+    if (node.hasNonNull(DELETE_ROW_FILTER)) {
+      deleteRowFilter = ExpressionParser.fromJson(node.get(DELETE_ROW_FILTER));
+    }
+
+    Boolean stageOnlyValue = JsonUtil.getBoolOrNull(STAGE_ONLY, node);
+    boolean stageOnly = stageOnlyValue != null ? stageOnlyValue : false;
+
+    String branch = JsonUtil.getStringOrNull(BRANCH, node);
+
+    Map<String, String> summary = null;
+    if (node.hasNonNull(SUMMARY)) {
+      summary = JsonUtil.getStringMap(SUMMARY, node);
+    }
+
+    Long baseSnapshotId = JsonUtil.getLongOrNull(BASE_SNAPSHOT_ID, node);
+
+    List<org.apache.iceberg.rest.CommitValidation> validations = null;
+    if (node.hasNonNull(COMMIT_VALIDATIONS)) {
+      validations =
+          org.apache.iceberg.relocated.com.google.common.collect.Lists.newArrayList();
+      for (JsonNode validationNode : node.get(COMMIT_VALIDATIONS)) {
+        validations.add(org.apache.iceberg.rest.CommitValidationParser.fromJson(validationNode));
+      }
+    }
+
+    return MetadataUpdate.ProduceSnapshotUpdate.createUnresolved(
+        action,
+        addDataFiles,
+        addDeleteFiles,
+        removeDataFiles,
+        removeDeleteFiles,
+        deleteRowFilter,
+        stageOnly,
+        branch,
+        summary,
+        baseSnapshotId,
+        validations);
+  }
+
+  private static List<JsonNode> readJsonNodeArray(String fieldName, JsonNode parentNode) {
+    if (!parentNode.hasNonNull(fieldName)) {
+      return null;
+    }
+
+    JsonNode arrayNode = parentNode.get(fieldName);
+    Preconditions.checkArgument(
+        arrayNode.isArray(), "Expected array for field %s, got: %s", fieldName, arrayNode);
+
+    List<JsonNode> result = new ArrayList<>(arrayNode.size());
+    Iterator<JsonNode> elements = arrayNode.elements();
+    while (elements.hasNext()) {
+      result.add(elements.next());
+    }
+    return result;
   }
 }

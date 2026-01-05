@@ -109,6 +109,8 @@ public class UpdateRequirements {
         update((MetadataUpdate.RemovePartitionSpecs) update);
       } else if (update instanceof MetadataUpdate.RemoveSchemas) {
         update((MetadataUpdate.RemoveSchemas) update);
+      } else if (update instanceof MetadataUpdate.ProduceSnapshotUpdate) {
+        update((MetadataUpdate.ProduceSnapshotUpdate) update);
       }
 
       return this;
@@ -206,6 +208,24 @@ public class UpdateRequirements {
                     require(new UpdateRequirement.AssertRefSnapshotID(name, ref.snapshotId()));
                   }
                 });
+      }
+    }
+
+    private void update(MetadataUpdate.ProduceSnapshotUpdate produceSnapshot) {
+      // ProduceSnapshotUpdate will create a snapshot and update a branch ref
+      // require that the target branch is unchanged from the base
+      String branch = produceSnapshot.branch();
+      if (branch == null) {
+        branch = SnapshotRef.MAIN_BRANCH;
+      }
+      // add returns true the first time the ref name is added
+      boolean added = changedRefs.add(branch);
+      if (added && base != null && !isReplace) {
+        SnapshotRef baseRef = base.ref(branch);
+        // require that the ref does not exist (null) or is the same as the base snapshot
+        require(
+            new UpdateRequirement.AssertRefSnapshotID(
+                branch, baseRef != null ? baseRef.snapshotId() : null));
       }
     }
 

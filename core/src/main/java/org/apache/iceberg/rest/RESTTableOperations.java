@@ -196,7 +196,11 @@ class RESTTableOperations implements TableOperations {
             String.format("Update type %s is not supported", updateType));
     }
 
-    UpdateTableRequest request = new UpdateTableRequest(requirements, updates);
+    // Pass partition specs for ProduceSnapshotUpdate serialization
+    // Use metadata.specsById() which has all specs including from base and any updates
+    UpdateTableRequest request =
+        new UpdateTableRequest(
+            requirements, updates, metadata != null ? metadata.specsById() : null);
 
     // the error handler will throw necessary exceptions like CommitFailedException and
     // UnknownCommitStateException

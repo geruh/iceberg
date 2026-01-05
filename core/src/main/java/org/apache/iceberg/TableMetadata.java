@@ -1279,6 +1279,12 @@ public class TableMetadata implements Serializable {
       return this;
     }
 
+    public Builder produceSnapshot(MetadataUpdate.ProduceSnapshotUpdate update) {
+      Preconditions.checkNotNull(update, "ProduceSnapshotUpdate cannot be null");
+      changes.add(update);
+      return this;
+    }
+
     public Builder setSnapshotsSupplier(SerializableSupplier<List<Snapshot>> snapshotsSupplier) {
       this.snapshotsSupplier = snapshotsSupplier;
       return this;

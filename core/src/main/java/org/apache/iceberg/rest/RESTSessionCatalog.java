@@ -160,6 +160,7 @@ public class RESTSessionCatalog extends BaseViewSessionCatalog
   private boolean reportingViaRestEnabled;
   private Integer pageSize = null;
   private boolean restScanPlanningEnabled;
+  private boolean restServerSideCommitsEnabled;
   private CloseableGroup closeables = null;
   private Set<Endpoint> endpoints;
   private Supplier<Map<String, String>> mutationHeaders = Map::of;
@@ -277,6 +278,12 @@ public class RESTSessionCatalog extends BaseViewSessionCatalog
             mergedProps,
             RESTCatalogProperties.REST_SCAN_PLANNING_ENABLED,
             RESTCatalogProperties.REST_SCAN_PLANNING_ENABLED_DEFAULT);
+
+    this.restServerSideCommitsEnabled =
+        PropertyUtil.propertyAsBoolean(
+            mergedProps,
+            RESTCatalogProperties.REST_SERVER_SIDE_COMMITS_ENABLED,
+            RESTCatalogProperties.REST_SERVER_SIDE_COMMITS_ENABLED_DEFAULT);
     super.initialize(name, mergedProps);
   }
 
@@ -506,8 +513,11 @@ public class RESTSessionCatalog extends BaseViewSessionCatalog
 
   private RESTTable restTableForScanPlanning(
       TableOperations ops, TableIdentifier finalIdentifier, RESTClient restClient) {
-    // server supports remote planning endpoint and server / client wants to do server side planning
-    if (endpoints.contains(Endpoint.V1_SUBMIT_TABLE_SCAN_PLAN) && restScanPlanningEnabled) {
+    boolean scanPlanningEnabled =
+        endpoints.contains(Endpoint.V1_SUBMIT_TABLE_SCAN_PLAN) && restScanPlanningEnabled;
+
+    // Return RESTTable if either scan planning or server-side commits is enabled
+    if (scanPlanningEnabled || restServerSideCommitsEnabled) {
       return new RESTTable(
           ops,
           fullTableName(finalIdentifier),
@@ -516,7 +526,8 @@ public class RESTSessionCatalog extends BaseViewSessionCatalog
           Map::of,
           finalIdentifier,
           paths,
-          endpoints);
+          endpoints,
+          restServerSideCommitsEnabled);
     }
     return null;
   }

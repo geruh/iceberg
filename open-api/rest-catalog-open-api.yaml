@@ -3140,6 +3140,150 @@ components:
         key-id:
           type: string
 
+    ProduceSnapshotUpdate:
+      allOf:
+        - $ref: '#/components/schemas/BaseUpdate'
+      required:
+        - snapshot-action
+      description: |
+        A metadata update that produces a new snapshot by applying file-level changes.
+        The catalog constructs and commits the snapshot while enforcing isolation guarantees.
+        This enables lightweight clients to commit data without full Iceberg library dependency.
+      properties:
+        action:
+          type: string
+          const: "produce-snapshot"
+        snapshot-action:
+          type: string
+          enum: ["append", "overwrite", "delete", "replace"]
+          description: The type of snapshot operation to perform
+        add-data-files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataFile'
+          description: Data files to add to the table
+        add-delete-files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeleteFile'
+          description: Delete files to add to the table
+        remove-data-files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataFile'
+          description: Data files to remove from the table
+        remove-delete-files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeleteFile'
+          description: Delete files to remove from the table
+        delete-row-filter:
+          $ref: '#/components/schemas/Expression'
+          description: Row-level filter for delete operations
+        stage-only:
+          type: boolean
+          default: false
+          description: If true, stage the snapshot but do not update refs
+        branch:
+          type: string
+          description: Target branch for the snapshot (defaults to main)
+        summary:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional summary properties for the snapshot
+        base-snapshot-id:
+          type: integer
+          format: int64
+          description: The snapshot ID from which changes were computed
+        commit-validations:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitValidation'
+          description: Validations to check before committing
+
+    CommitValidation:
+      type: object
+      required:
+        - type
+      discriminator:
+        propertyName: type
+        mapping:
+          not-allowed-added-data-files: '#/components/schemas/NotAllowedAddedDataFilesValidation'
+          not-allowed-added-delete-files: '#/components/schemas/NotAllowedAddedDeleteFilesValidation'
+          required-data-files: '#/components/schemas/RequiredDataFilesValidation'
+          required-delete-files: '#/components/schemas/RequiredDeleteFilesValidation'
+          not-allowed-new-deletes-for-data-files: '#/components/schemas/NotAllowedNewDeletesForDataFilesValidation'
+      description: A commit-time validation that must pass for the operation to succeed
+      properties:
+        type:
+          type: string
+          description: The type of validation
+
+    NotAllowedAddedDataFilesValidation:
+      allOf:
+        - $ref: '#/components/schemas/CommitValidation'
+      required:
+        - filter
+      description: Validates that no data files matching the filter have been added since the base snapshot
+      properties:
+        filter:
+          $ref: '#/components/schemas/Expression'
+
+    NotAllowedAddedDeleteFilesValidation:
+      allOf:
+        - $ref: '#/components/schemas/CommitValidation'
+      required:
+        - filter
+      description: Validates that no delete files matching the filter have been added since the base snapshot
+      properties:
+        filter:
+          $ref: '#/components/schemas/Expression'
+
+    RequiredDataFilesValidation:
+      allOf:
+        - $ref: '#/components/schemas/CommitValidation'
+      description: Validates that required data files still exist at commit time
+      properties:
+        filter:
+          $ref: '#/components/schemas/Expression'
+        file-paths:
+          type: array
+          items:
+            type: string
+          description: Specific file paths that must exist
+        allowed-remove-operations:
+          type: array
+          items:
+            type: string
+          description: Operations that are allowed to remove files (e.g., delete, overwrite, replace)
+
+    RequiredDeleteFilesValidation:
+      allOf:
+        - $ref: '#/components/schemas/CommitValidation'
+      description: Validates that required delete files still exist at commit time
+      properties:
+        filter:
+          $ref: '#/components/schemas/Expression'
+        file-paths:
+          type: array
+          items:
+            type: string
+          description: Specific file paths that must exist
+
+    NotAllowedNewDeletesForDataFilesValidation:
+      allOf:
+        - $ref: '#/components/schemas/CommitValidation'
+      description: Validates that no new deletes have been applied to specific data files
+      properties:
+        file-paths:
+          type: array
+          items:
+            type: string
+          description: Data file paths to check for new deletes
+        filter:
+          $ref: '#/components/schemas/Expression'
+
     TableUpdate:
       anyOf:
         - $ref: '#/components/schemas/AssignUUIDUpdate'
@@ -3163,6 +3307,7 @@ components:
         - $ref: '#/components/schemas/RemoveSchemasUpdate'
         - $ref: '#/components/schemas/AddEncryptionKeyUpdate'
         - $ref: '#/components/schemas/RemoveEncryptionKeyUpdate'
+        - $ref: '#/components/schemas/ProduceSnapshotUpdate'
 
     ViewUpdate:
       anyOf:

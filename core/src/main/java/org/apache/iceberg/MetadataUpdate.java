@@ -559,4 +559,356 @@ public interface MetadataUpdate extends Serializable {
       builder.removeEncryptionKey(keyId);
     }
   }
+
+  /**
+   * A metadata update that produces a new snapshot by applying file-level changes.
+   *
+   * <p>This update is designed for fine-grained metadata commits where clients submit file-level
+   * changes, and the catalog constructs and commits the snapshot while enforcing isolation
+   * guarantees.
+   *
+   * <p>This class supports two modes:
+   *
+   * <ul>
+   *   <li><b>Client-side (resolved):</b> Created with DataFile/DeleteFile objects when a client
+   *       constructs the update. Use the primary constructor.
+   *   <li><b>Server-side (unresolved):</b> Created during JSON parsing when partition specs are not
+   *       yet available. Use {@link #createUnresolved} and later call {@link #resolve} with the
+   *       table's partition specs.
+   * </ul>
+   */
+  class ProduceSnapshotUpdate implements MetadataUpdate {
+    private final String action;
+    private final java.util.List<DataFile> addDataFiles;
+    private final java.util.List<DeleteFile> addDeleteFiles;
+    private final java.util.List<DataFile> removeDataFiles;
+    private final java.util.List<DeleteFile> removeDeleteFiles;
+    private final org.apache.iceberg.expressions.Expression deleteRowFilter;
+    private final boolean stageOnly;
+    private final String branch;
+    private final java.util.Map<String, String> summary;
+    private final Long baseSnapshotId;
+    private final java.util.List<org.apache.iceberg.rest.CommitValidation> validations;
+
+    // Unresolved file JSON nodes - used during parsing before specs are available
+    private final java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDataFiles;
+    private final java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDeleteFiles;
+    private final java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDataFiles;
+    private final java.util.List<com.fasterxml.jackson.databind.JsonNode>
+        unresolvedRemoveDeleteFiles;
+
+    /**
+     * Creates a ProduceSnapshotUpdate with resolved file objects.
+     *
+     * <p>Use this constructor on the client side when creating an update to send to the server.
+     */
+    public ProduceSnapshotUpdate(
+        String action,
+        java.util.List<DataFile> addDataFiles,
+        java.util.List<DeleteFile> addDeleteFiles,
+        java.util.List<DataFile> removeDataFiles,
+        java.util.List<DeleteFile> removeDeleteFiles,
+        org.apache.iceberg.expressions.Expression deleteRowFilter,
+        boolean stageOnly,
+        String branch,
+        java.util.Map<String, String> summary,
+        Long baseSnapshotId,
+        java.util.List<org.apache.iceberg.rest.CommitValidation> validations) {
+      org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkArgument(
+          action != null, "Snapshot action cannot be null");
+      this.action = action;
+      // Defensive copy lists to prevent external mutation
+      this.addDataFiles =
+          addDataFiles != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  addDataFiles)
+              : java.util.Collections.emptyList();
+      this.addDeleteFiles =
+          addDeleteFiles != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  addDeleteFiles)
+              : java.util.Collections.emptyList();
+      this.removeDataFiles =
+          removeDataFiles != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  removeDataFiles)
+              : java.util.Collections.emptyList();
+      this.removeDeleteFiles =
+          removeDeleteFiles != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  removeDeleteFiles)
+              : java.util.Collections.emptyList();
+      this.deleteRowFilter = deleteRowFilter;
+      this.stageOnly = stageOnly;
+      this.branch = branch;
+      this.summary =
+          summary != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap.copyOf(summary)
+              : java.util.Collections.emptyMap();
+      this.baseSnapshotId = baseSnapshotId;
+      this.validations =
+          validations != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  validations)
+              : java.util.Collections.emptyList();
+      // No unresolved JSON when constructed with resolved files
+      this.unresolvedAddDataFiles = null;
+      this.unresolvedAddDeleteFiles = null;
+      this.unresolvedRemoveDataFiles = null;
+      this.unresolvedRemoveDeleteFiles = null;
+    }
+
+    // Private constructor for unresolved state (used by parser)
+    private ProduceSnapshotUpdate(
+        String action,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDataFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDeleteFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDataFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDeleteFiles,
+        org.apache.iceberg.expressions.Expression deleteRowFilter,
+        boolean stageOnly,
+        String branch,
+        java.util.Map<String, String> summary,
+        Long baseSnapshotId,
+        java.util.List<org.apache.iceberg.rest.CommitValidation> validations,
+        @SuppressWarnings("unused") boolean unresolvedMarker) {
+      org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkArgument(
+          action != null, "Snapshot action cannot be null");
+      this.action = action;
+      this.addDataFiles = null;
+      this.addDeleteFiles = null;
+      this.removeDataFiles = null;
+      this.removeDeleteFiles = null;
+      this.deleteRowFilter = deleteRowFilter;
+      this.stageOnly = stageOnly;
+      this.branch = branch;
+      this.summary =
+          summary != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap.copyOf(summary)
+              : java.util.Collections.emptyMap();
+      this.baseSnapshotId = baseSnapshotId;
+      this.validations =
+          validations != null
+              ? org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.copyOf(
+                  validations)
+              : java.util.Collections.emptyList();
+      this.unresolvedAddDataFiles = unresolvedAddDataFiles;
+      this.unresolvedAddDeleteFiles = unresolvedAddDeleteFiles;
+      this.unresolvedRemoveDataFiles = unresolvedRemoveDataFiles;
+      this.unresolvedRemoveDeleteFiles = unresolvedRemoveDeleteFiles;
+    }
+
+    /**
+     * Creates an unresolved ProduceSnapshotUpdate from JSON parsing.
+     *
+     * <p>The file JSON nodes are stored and can be resolved later using {@link #resolve} when
+     * partition specs are available.
+     */
+    public static ProduceSnapshotUpdate createUnresolved(
+        String action,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDataFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDeleteFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDataFiles,
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDeleteFiles,
+        org.apache.iceberg.expressions.Expression deleteRowFilter,
+        boolean stageOnly,
+        String branch,
+        java.util.Map<String, String> summary,
+        Long baseSnapshotId,
+        java.util.List<org.apache.iceberg.rest.CommitValidation> validations) {
+      return new ProduceSnapshotUpdate(
+          action,
+          unresolvedAddDataFiles,
+          unresolvedAddDeleteFiles,
+          unresolvedRemoveDataFiles,
+          unresolvedRemoveDeleteFiles,
+          deleteRowFilter,
+          stageOnly,
+          branch,
+          summary,
+          baseSnapshotId,
+          validations,
+          true /* unresolvedMarker */);
+    }
+
+    /**
+     * Resolves the unresolved file JSON nodes using the provided partition specs.
+     *
+     * @param specsById map of partition spec ID to partition spec
+     * @return a new ProduceSnapshotUpdate with resolved DataFile/DeleteFile objects
+     * @throws IllegalStateException if this update is already resolved
+     */
+    public ProduceSnapshotUpdate resolve(java.util.Map<Integer, PartitionSpec> specsById) {
+      if (!isUnresolved()) {
+        throw new IllegalStateException("ProduceSnapshotUpdate is already resolved");
+      }
+
+      java.util.List<DataFile> resolvedAddData =
+          resolveDataFiles(unresolvedAddDataFiles, specsById);
+      java.util.List<DeleteFile> resolvedAddDelete =
+          resolveDeleteFiles(unresolvedAddDeleteFiles, specsById);
+      java.util.List<DataFile> resolvedRemoveData =
+          resolveDataFiles(unresolvedRemoveDataFiles, specsById);
+      java.util.List<DeleteFile> resolvedRemoveDelete =
+          resolveDeleteFiles(unresolvedRemoveDeleteFiles, specsById);
+
+      return new ProduceSnapshotUpdate(
+          action,
+          resolvedAddData,
+          resolvedAddDelete,
+          resolvedRemoveData,
+          resolvedRemoveDelete,
+          deleteRowFilter,
+          stageOnly,
+          branch,
+          summary,
+          baseSnapshotId,
+          validations);
+    }
+
+    private java.util.List<DataFile> resolveDataFiles(
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> jsonNodes,
+        java.util.Map<Integer, PartitionSpec> specsById) {
+      if (jsonNodes == null || jsonNodes.isEmpty()) {
+        return java.util.Collections.emptyList();
+      }
+      org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.Builder<DataFile>
+          builder =
+              org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.builder();
+      for (com.fasterxml.jackson.databind.JsonNode node : jsonNodes) {
+        builder.add((DataFile) ContentFileParser.fromJson(node, specsById));
+      }
+      return builder.build();
+    }
+
+    private java.util.List<DeleteFile> resolveDeleteFiles(
+        java.util.List<com.fasterxml.jackson.databind.JsonNode> jsonNodes,
+        java.util.Map<Integer, PartitionSpec> specsById) {
+      if (jsonNodes == null || jsonNodes.isEmpty()) {
+        return java.util.Collections.emptyList();
+      }
+      org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.Builder<DeleteFile>
+          builder =
+              org.apache.iceberg.relocated.com.google.common.collect.ImmutableList.builder();
+      for (com.fasterxml.jackson.databind.JsonNode node : jsonNodes) {
+        builder.add((DeleteFile) ContentFileParser.fromJson(node, specsById));
+      }
+      return builder.build();
+    }
+
+    /**
+     * Returns whether this update has unresolved file JSON that needs to be resolved.
+     *
+     * <p>An update is unresolved when it was created via {@link #createUnresolved} during JSON
+     * parsing. In the unresolved state, the resolved file lists (addDataFiles, etc.) are null. In
+     * the resolved state, they are never null (at minimum empty lists).
+     *
+     * @return true if unresolved, false if resolved
+     */
+    public boolean isUnresolved() {
+      // The resolved constructor always sets addDataFiles to a non-null value (emptyList at minimum)
+      // The unresolved constructor always sets addDataFiles to null
+      // So we can use addDataFiles == null to detect unresolved state
+      return addDataFiles == null;
+    }
+
+    public String action() {
+      return action;
+    }
+
+    public java.util.List<DataFile> addDataFiles() {
+      checkResolved();
+      return addDataFiles;
+    }
+
+    public java.util.List<DeleteFile> addDeleteFiles() {
+      checkResolved();
+      return addDeleteFiles;
+    }
+
+    public java.util.List<DataFile> removeDataFiles() {
+      checkResolved();
+      return removeDataFiles;
+    }
+
+    public java.util.List<DeleteFile> removeDeleteFiles() {
+      checkResolved();
+      return removeDeleteFiles;
+    }
+
+    /**
+     * Returns the unresolved add-data-files JSON nodes, or null if resolved.
+     *
+     * <p>This is used by MetadataUpdateParser for serialization when files are unresolved.
+     */
+    public java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDataFiles() {
+      return unresolvedAddDataFiles;
+    }
+
+    /**
+     * Returns the unresolved add-delete-files JSON nodes, or null if resolved.
+     *
+     * <p>This is used by MetadataUpdateParser for serialization when files are unresolved.
+     */
+    public java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedAddDeleteFiles() {
+      return unresolvedAddDeleteFiles;
+    }
+
+    /**
+     * Returns the unresolved remove-data-files JSON nodes, or null if resolved.
+     *
+     * <p>This is used by MetadataUpdateParser for serialization when files are unresolved.
+     */
+    public java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDataFiles() {
+      return unresolvedRemoveDataFiles;
+    }
+
+    /**
+     * Returns the unresolved remove-delete-files JSON nodes, or null if resolved.
+     *
+     * <p>This is used by MetadataUpdateParser for serialization when files are unresolved.
+     */
+    public java.util.List<com.fasterxml.jackson.databind.JsonNode> unresolvedRemoveDeleteFiles() {
+      return unresolvedRemoveDeleteFiles;
+    }
+
+    private void checkResolved() {
+      if (isUnresolved()) {
+        throw new IllegalStateException(
+            "ProduceSnapshotUpdate has unresolved files. Call resolve(specsById) first.");
+      }
+    }
+
+    public org.apache.iceberg.expressions.Expression deleteRowFilter() {
+      return deleteRowFilter;
+    }
+
+    public boolean stageOnly() {
+      return stageOnly;
+    }
+
+    public String branch() {
+      return branch;
+    }
+
+    public java.util.Map<String, String> summary() {
+      return summary;
+    }
+
+    public Long baseSnapshotId() {
+      return baseSnapshotId;
+    }
+
+    public java.util.List<org.apache.iceberg.rest.CommitValidation> validations() {
+      return validations;
+    }
+
+    @Override
+    public void applyTo(TableMetadata.Builder metadataBuilder) {
+      // ProduceSnapshotUpdate is processed by the server-side handler in CatalogHandlers
+      // The actual snapshot production is done there, not in this method
+      throw new UnsupportedOperationException(
+          "ProduceSnapshotUpdate must be processed by the server-side handler");
+    }
+  }
 }

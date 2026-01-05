@@ -19,7 +19,9 @@
 package org.apache.iceberg.rest.requests;
 
 import java.util.List;
+import java.util.Map;
 import org.apache.iceberg.MetadataUpdate;
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
@@ -31,6 +33,9 @@ public class UpdateTableRequest implements RESTRequest {
   private List<org.apache.iceberg.UpdateRequirement> requirements;
   private List<MetadataUpdate> updates;
 
+  // Transient field used only for serialization - not included in JSON
+  private transient Map<Integer, PartitionSpec> specsById;
+
   public UpdateTableRequest() {
     // needed for Jackson deserialization
   }
@@ -39,6 +44,15 @@ public class UpdateTableRequest implements RESTRequest {
       List<org.apache.iceberg.UpdateRequirement> requirements, List<MetadataUpdate> updates) {
     this.requirements = requirements;
     this.updates = updates;
+  }
+
+  public UpdateTableRequest(
+      List<org.apache.iceberg.UpdateRequirement> requirements,
+      List<MetadataUpdate> updates,
+      Map<Integer, PartitionSpec> specsById) {
+    this.requirements = requirements;
+    this.updates = updates;
+    this.specsById = specsById;
   }
 
   UpdateTableRequest(
@@ -62,6 +76,18 @@ public class UpdateTableRequest implements RESTRequest {
 
   public TableIdentifier identifier() {
     return identifier;
+  }
+
+  /**
+   * Returns partition specs by ID, used for serializing ProduceSnapshotUpdate.
+   *
+   * <p>This is a transient field used only during client-side serialization. It is not included in
+   * the JSON representation of the request.
+   *
+   * @return partition specs by ID, or null if not set
+   */
+  public Map<Integer, PartitionSpec> specsById() {
+    return specsById;
   }
 
   @Override

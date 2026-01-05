@@ -41,6 +41,10 @@ public final class RESTCatalogProperties {
   public static final String REST_SCAN_PLANNING_ENABLED = "rest-scan-planning-enabled";
   public static final boolean REST_SCAN_PLANNING_ENABLED_DEFAULT = false;
 
+  // Enable server-side snapshot production (commits are created server-side from file-level changes)
+  public static final String REST_SERVER_SIDE_COMMITS_ENABLED = "rest-server-side-commits-enabled";
+  public static final boolean REST_SERVER_SIDE_COMMITS_ENABLED_DEFAULT = false;
+
   public enum SnapshotMode {
     ALL,
     REFS

@@ -21,10 +21,13 @@ package org.apache.iceberg.rest;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.BatchScan;
 import org.apache.iceberg.BatchScanAdapter;
+import org.apache.iceberg.DeleteFiles;
 import org.apache.iceberg.ImmutableTableScanContext;
+import org.apache.iceberg.OverwriteFiles;
 import org.apache.iceberg.RequiresRemoteScanPlanning;
 import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.TableScan;
@@ -38,6 +41,7 @@ class RESTTable extends BaseTable implements RequiresRemoteScanPlanning {
   private final ResourcePaths resourcePaths;
   private final TableIdentifier tableIdentifier;
   private final Set<Endpoint> supportedEndpoints;
+  private final boolean serverSideCommitsEnabled;
 
   RESTTable(
       TableOperations ops,
@@ -47,7 +51,8 @@ class RESTTable extends BaseTable implements RequiresRemoteScanPlanning {
       Supplier<Map<String, String>> headers,
       TableIdentifier tableIdentifier,
       ResourcePaths resourcePaths,
-      Set<Endpoint> supportedEndpoints) {
+      Set<Endpoint> supportedEndpoints,
+      boolean serverSideCommitsEnabled) {
     super(ops, name, reporter);
     this.reporter = reporter;
     this.client = client;
@@ -55,6 +60,7 @@ class RESTTable extends BaseTable implements RequiresRemoteScanPlanning {
     this.tableIdentifier = tableIdentifier;
     this.resourcePaths = resourcePaths;
     this.supportedEndpoints = supportedEndpoints;
+    this.serverSideCommitsEnabled = serverSideCommitsEnabled;
   }
 
   @Override
@@ -69,6 +75,30 @@ class RESTTable extends BaseTable implements RequiresRemoteScanPlanning {
         tableIdentifier,
         resourcePaths,
         supportedEndpoints);
+  }
+
+  @Override
+  public AppendFiles newAppend() {
+    if (serverSideCommitsEnabled) {
+      return new ProduceAppend(tableIdentifier.toString(), operations());
+    }
+    return super.newAppend();
+  }
+
+  @Override
+  public DeleteFiles newDelete() {
+    if (serverSideCommitsEnabled) {
+      return new ProduceDelete(tableIdentifier.toString(), operations());
+    }
+    return super.newDelete();
+  }
+
+  @Override
+  public OverwriteFiles newOverwrite() {
+    if (serverSideCommitsEnabled) {
+      return new ProduceOverwrite(tableIdentifier.toString(), operations());
+    }
+    return super.newOverwrite();
   }
 
   @Override
